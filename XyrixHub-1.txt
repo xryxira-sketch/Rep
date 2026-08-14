@@ -1,0 +1,3464 @@
+--========================================================--
+--                       XYRIX
+--             PREMIUM LANDSCAPE UI v FINAL
+--========================================================--
+-- Features:
+-- • Animated floating X button
+-- • Animated aura / spinning logo
+-- • Landscape responsive panel
+-- • Sidebar navigation + logo
+-- • Main / Movement / Checkpoints / Settings / Visuals / Tools
+-- • Float (default height 16) + adjustable height
+-- • Infinite Lift + adjustable speed
+-- • Lift auto-TP timer (loops): keeps Lift ON, TPs to CP1/CP2 every interval, repeats
+-- • Timer unit selector (ns → centuries, 0 = off)
+-- • Zenith-style sidebar (accent bars, hover, logo)
+-- • Noclip
+-- • TPWalk + adjustable speed
+-- • Infinite Jump
+-- • WalkSpeed control
+-- • Anti-AFK
+-- • Click Teleport (Ctrl + Click)
+-- • Rejoin Server
+-- • Server Hop
+-- • Max Quality (Level 21) + Streaming Radius (keeps map loaded high up)
+-- • Stream Keep-Alive (RequestStreamAroundAsync while lifting — anti-pause)
+-- • Improved Zenith sidebar GUI
+-- • FPS Boost (optional low quality — not for high flying)
+-- • Cleaner checkpoint system (CP1 / CP2 / cycle / reset)
+-- • World visuals (NoFog uses math.huge, FullBright, Bloom, etc.)
+-- • GUI scale settings
+-- • Session save / reset
+-- • PC + Mobile input
+--========================================================--
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local Player = Players.LocalPlayer
+local Parent = gethui and gethui() or game:GetService("CoreGui")
+
+--========================================================--
+-- CLEANUP
+--========================================================--
+
+for _, v in ipairs(Parent:GetChildren()) do
+	if v.Name == "Xyrix" or v.Name == "XyrixHub" then
+		v:Destroy()
+	end
+end
+
+--========================================================--
+-- GUI
+--========================================================--
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "Xyrix"
+Gui.ResetOnSpawn = false
+Gui.IgnoreGuiInset = true
+Gui.DisplayOrder = 999999
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+Gui.Parent = Parent
+
+--========================================================--
+-- THEME
+--========================================================--
+
+local Theme = {
+	Background = Color3.fromRGB(8, 7, 15),
+	Background2 = Color3.fromRGB(12, 10, 23),
+
+	Panel = Color3.fromRGB(15, 13, 28),
+	Panel2 = Color3.fromRGB(20, 17, 36),
+
+	Card = Color3.fromRGB(23, 20, 42),
+	CardHover = Color3.fromRGB(30, 24, 53),
+
+	Violet = Color3.fromRGB(170, 75, 255),
+	Purple = Color3.fromRGB(126, 65, 255),
+	Indigo = Color3.fromRGB(82, 83, 255),
+	Blue = Color3.fromRGB(61, 139, 255),
+	Cyan = Color3.fromRGB(85, 210, 255),
+
+	White = Color3.fromRGB(247, 245, 255),
+	SoftWhite = Color3.fromRGB(220, 216, 235),
+	Gray = Color3.fromRGB(145, 140, 168),
+	DarkGray = Color3.fromRGB(83, 78, 103),
+
+	Green = Color3.fromRGB(78, 225, 151),
+	Red = Color3.fromRGB(255, 91, 125),
+
+	Off = Color3.fromRGB(48, 44, 66),
+	Stroke = Color3.fromRGB(91, 75, 145),
+}
+
+local Fast = TweenInfo.new(
+	0.16,
+	Enum.EasingStyle.Quint,
+	Enum.EasingDirection.Out
+)
+
+local Smooth = TweenInfo.new(
+	0.3,
+	Enum.EasingStyle.Quint,
+	Enum.EasingDirection.Out
+)
+
+local Spring = TweenInfo.new(
+	0.42,
+	Enum.EasingStyle.Back,
+	Enum.EasingDirection.Out
+)
+
+--========================================================--
+-- HELPERS
+--========================================================--
+
+local function New(class, props, parent)
+	local obj = Instance.new(class)
+
+	for property, value in pairs(props or {}) do
+		obj[property] = value
+	end
+
+	obj.Parent = parent
+	return obj
+end
+
+local function Corner(obj, radius)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius)
+	c.Parent = obj
+	return c
+end
+
+local function Stroke(obj, color, transparency, thickness)
+	local s = Instance.new("UIStroke")
+	s.Color = color
+	s.Transparency = transparency or 0
+	s.Thickness = thickness or 1
+	s.Parent = obj
+	return s
+end
+
+local function Gradient(obj, colors, rotation)
+	local keys = {}
+
+	for i, color in ipairs(colors) do
+		keys[#keys + 1] = ColorSequenceKeypoint.new(
+			(i - 1) / (#colors - 1),
+			color
+		)
+	end
+
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(keys)
+	g.Rotation = rotation or 0
+	g.Parent = obj
+
+	return g
+end
+
+local function Tween(obj, properties, info)
+	local t = TweenService:Create(
+		obj,
+		info or Fast,
+		properties
+	)
+
+	t:Play()
+	return t
+end
+
+--========================================================--
+-- DEFAULT SETTINGS
+--========================================================--
+
+local Defaults = {
+	GUIScale = 0.82,
+
+	FloatHeight = 16,
+	LiftSpeed = 1.5,
+	TPWalkSpeed = 1,
+	WalkSpeed = 16,
+	JumpPower = 50,
+	LiftTimerValue = 5, -- amount
+	LiftTimerUnit = "Seconds", -- unit name (loops: TP to CP then keep lifting)
+
+	Float = false,
+	Lift = false,
+	Noclip = false,
+	TPWalk = false,
+	InfiniteJump = false,
+}
+
+local Settings = {}
+
+for k, v in pairs(Defaults) do
+	Settings[k] = v
+end
+
+--========================================================--
+-- CHARACTER
+--========================================================--
+
+local Character
+local Humanoid
+local Root
+
+local function UpdateCharacter()
+	Character = Player.Character or Player.CharacterAdded:Wait()
+
+	Humanoid = Character:WaitForChild("Humanoid")
+	Root = Character:WaitForChild("HumanoidRootPart")
+end
+
+UpdateCharacter()
+
+Player.CharacterAdded:Connect(function()
+	task.wait(0.25)
+	UpdateCharacter()
+end)
+
+--========================================================--
+-- MECHANIC CONNECTIONS
+--========================================================--
+
+local FloatConnection
+local LiftConnection
+local NoclipConnection
+local TPWalkConnection
+
+local function Disconnect(connection)
+	if connection then
+		connection:Disconnect()
+	end
+
+	return nil
+end
+
+--========================================================--
+-- FLOAT
+--========================================================--
+
+local FloatBaseY
+
+local function StopFloat()
+	FloatConnection = Disconnect(FloatConnection)
+	FloatBaseY = nil
+
+	-- Remove artificial vertical velocity rather than
+	-- suddenly forcing the character downward/upward.
+	if Root and Root.Parent then
+		local velocity = Root.AssemblyLinearVelocity
+
+		Root.AssemblyLinearVelocity = Vector3.new(
+			velocity.X,
+			0,
+			velocity.Z
+		)
+	end
+end
+
+local function StartFloat()
+	StopFloat()
+
+	if not Root or not Root.Parent then
+		return
+	end
+
+	FloatBaseY = Root.Position.Y + Settings.FloatHeight
+
+	FloatConnection = RunService.Heartbeat:Connect(function()
+		if not Root or not Root.Parent then
+			return
+		end
+
+		if not Settings.Float then
+			return
+		end
+
+		local p = Root.Position
+
+		-- Preserve horizontal movement.
+		-- Only control the vertical coordinate.
+		Root.AssemblyLinearVelocity = Vector3.new(
+			Root.AssemblyLinearVelocity.X,
+			0,
+			Root.AssemblyLinearVelocity.Z
+		)
+
+		Root.CFrame = CFrame.new(
+			p.X,
+			FloatBaseY,
+			p.Z
+		) * CFrame.Angles(
+			Root.Orientation.X * math.pi / 180,
+			Root.Orientation.Y * math.pi / 180,
+			Root.Orientation.Z * math.pi / 180
+		)
+	end)
+end
+
+local function SetFloat(value)
+	Settings.Float = value
+
+	if value then
+		StartFloat()
+	else
+		StopFloat()
+	end
+end
+
+--========================================================--
+-- INFINITE LIFT + AUTO TIMER
+--========================================================--
+
+local LiftStartTime = 0
+local LiftTimerConnection
+local StreamKeepAliveConnection
+local StreamKeepAliveEnabled = true
+
+local function StopLiftTimer()
+	LiftTimerConnection = Disconnect(LiftTimerConnection)
+	LiftStartTime = 0
+end
+
+local function StopStreamKeepAlive()
+	if typeof(StreamKeepAliveConnection) == "thread" then
+		task.cancel(StreamKeepAliveConnection)
+	end
+	StreamKeepAliveConnection = nil
+end
+
+local function StartStreamKeepAlive()
+	StopStreamKeepAlive()
+
+	-- RequestStreamAroundAsync keeps map chunks loaded while flying (reduces hitch/pause)
+	StreamKeepAliveConnection = task.spawn(function()
+		while Settings.Lift and StreamKeepAliveEnabled do
+			pcall(function()
+				if Root and Root.Parent then
+					Player:RequestStreamAroundAsync(Root.Position, 5)
+				end
+				if Checkpoint1 then
+					Player:RequestStreamAroundAsync(Checkpoint1.Position, 5)
+				end
+			end)
+			task.wait(2)
+		end
+		StreamKeepAliveConnection = nil
+	end)
+end
+
+local function StopLift()
+	LiftConnection = Disconnect(LiftConnection)
+	StopLiftTimer()
+	StopStreamKeepAlive()
+
+	if Root and Root.Parent then
+		local velocity = Root.AssemblyLinearVelocity
+
+		Root.AssemblyLinearVelocity = Vector3.new(
+			velocity.X,
+			0,
+			velocity.Z
+		)
+	end
+end
+
+-- Unit multipliers to seconds
+local TimerUnits = {
+	{Name = "Nanoseconds", Multiplier = 1e-9},
+	{Name = "Microseconds", Multiplier = 1e-6},
+	{Name = "Milliseconds", Multiplier = 0.001},
+	{Name = "Seconds", Multiplier = 1},
+	{Name = "Minutes", Multiplier = 60},
+	{Name = "Hours", Multiplier = 3600},
+	{Name = "Days", Multiplier = 86400},
+	{Name = "Weeks", Multiplier = 604800},
+	{Name = "Months", Multiplier = 2592000}, -- ~30 days
+	{Name = "Years", Multiplier = 31536000},
+	{Name = "Decades", Multiplier = 315360000},
+	{Name = "Centuries", Multiplier = 3153600000},
+}
+
+local function GetUnitMultiplier(unitName)
+	for _, unit in ipairs(TimerUnits) do
+		if unit.Name == unitName then
+			return unit.Multiplier
+		end
+	end
+	return 60 -- default minutes
+end
+
+local function GetNextUnit(current)
+	for i, unit in ipairs(TimerUnits) do
+		if unit.Name == current then
+			local nextIndex = (i % #TimerUnits) + 1
+			return TimerUnits[nextIndex].Name
+		end
+	end
+	return "Minutes"
+end
+
+local function StartLiftTimer()
+	StopLiftTimer()
+
+	local amount = tonumber(Settings.LiftTimerValue) or 0
+	if amount <= 0 then
+		return -- 0 = disabled
+	end
+
+	local multiplier = GetUnitMultiplier(Settings.LiftTimerUnit or "Minutes")
+	local limitSeconds = amount * multiplier
+
+	-- Extremely small values still need a minimum practical tick
+	if limitSeconds < 0.05 then
+		limitSeconds = 0.05
+	end
+
+	LiftStartTime = os.clock()
+
+	LiftTimerConnection = RunService.Heartbeat:Connect(function()
+		if not Settings.Lift then
+			StopLiftTimer()
+			return
+		end
+
+		if (os.clock() - LiftStartTime) >= limitSeconds then
+			TriggerLiftTimeout()
+		end
+	end)
+end
+
+local function TriggerLiftTimeout()
+	-- Keep Infinite Lift ON. Teleport to checkpoint, then restart timer so it loops.
+	if not Root or not Root.Parent then
+		-- Still restart timer so the cycle continues when character is valid again
+		LiftStartTime = os.clock()
+		return
+	end
+
+	local target = Checkpoint1 or Checkpoint2
+	local label = Checkpoint1 and "CP1" or (Checkpoint2 and "CP2" or nil)
+
+	if target then
+		Root.CFrame = target
+		-- Clear residual vertical velocity so the teleport feels clean, then lift continues
+		local v = Root.AssemblyLinearVelocity
+		Root.AssemblyLinearVelocity = Vector3.new(v.X, 0, v.Z)
+
+		if status then
+			status.Text = "Lift timer → teleported to " .. label .. " (lift still on)."
+		end
+	else
+		if status then
+			status.Text = "Lift timer hit — no checkpoint saved."
+		end
+	end
+
+	-- Restart the timer so the cycle repeats while Lift stays enabled
+	LiftStartTime = os.clock()
+end
+
+local function StartLift()
+	StopLift()
+
+	LiftConnection = RunService.Heartbeat:Connect(function()
+		if not Settings.Lift then
+			return
+		end
+
+		if not Root or not Root.Parent then
+			return
+		end
+
+		local velocity = Root.AssemblyLinearVelocity
+
+		Root.AssemblyLinearVelocity = Vector3.new(
+			velocity.X,
+			Settings.LiftSpeed * 25,
+			velocity.Z
+		)
+	end)
+
+	StartLiftTimer()
+	StartStreamKeepAlive()
+end
+
+local function SetLift(value)
+	Settings.Lift = value
+
+	if value then
+		StartLift()
+	else
+		StopLift()
+	end
+end
+
+--========================================================--
+-- NOCLIP
+--========================================================--
+
+local function RestoreCollisions()
+	if not Character then
+		return
+	end
+
+	for _, object in ipairs(Character:GetDescendants()) do
+		if object:IsA("BasePart") then
+			object.CanCollide = true
+		end
+	end
+end
+
+local function StopNoclip()
+	NoclipConnection = Disconnect(NoclipConnection)
+	RestoreCollisions()
+end
+
+local function StartNoclip()
+	StopNoclip()
+
+	NoclipConnection = RunService.Stepped:Connect(function()
+		if not Settings.Noclip then
+			return
+		end
+
+		if not Character then
+			return
+		end
+
+		for _, object in ipairs(Character:GetDescendants()) do
+			if object:IsA("BasePart") then
+				object.CanCollide = false
+			end
+		end
+	end)
+end
+
+local function SetNoclip(value)
+	Settings.Noclip = value
+
+	if value then
+		StartNoclip()
+	else
+		StopNoclip()
+	end
+end
+
+--========================================================--
+-- TPWALK
+--========================================================--
+
+local function StopTPWalk()
+	TPWalkConnection = Disconnect(TPWalkConnection)
+end
+
+local function StartTPWalk()
+	StopTPWalk()
+
+	TPWalkConnection = RunService.Heartbeat:Connect(function()
+		if not Settings.TPWalk then
+			return
+		end
+
+		if not Humanoid or not Root then
+			return
+		end
+
+		local direction = Humanoid.MoveDirection
+
+		if direction.Magnitude > 0 then
+			Root.CFrame =
+				Root.CFrame +
+				(direction * Settings.TPWalkSpeed)
+		end
+	end)
+end
+
+local function SetTPWalk(value)
+	Settings.TPWalk = value
+
+	if value then
+		StartTPWalk()
+	else
+		StopTPWalk()
+	end
+end
+
+--========================================================--
+-- INFINITE JUMP
+--========================================================--
+
+local JumpConnection
+
+local function StopInfiniteJump()
+	JumpConnection = Disconnect(JumpConnection)
+end
+
+local function StartInfiniteJump()
+	StopInfiniteJump()
+
+	JumpConnection = UserInputService.JumpRequest:Connect(function()
+		if not Settings.InfiniteJump then
+			return
+		end
+
+		if Humanoid and Humanoid.Parent then
+			Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end)
+end
+
+local function SetInfiniteJump(value)
+	Settings.InfiniteJump = value
+
+	if value then
+		StartInfiniteJump()
+	else
+		StopInfiniteJump()
+	end
+end
+
+--========================================================--
+-- WALK SPEED
+--========================================================--
+
+local function ApplyWalkSpeed()
+	if Humanoid and Humanoid.Parent then
+		Humanoid.WalkSpeed = Settings.WalkSpeed
+	end
+end
+
+local function SetWalkSpeed(value)
+	Settings.WalkSpeed = value
+	ApplyWalkSpeed()
+end
+
+-- Keep WalkSpeed after respawn
+Player.CharacterAdded:Connect(function()
+	task.wait(0.3)
+	if Humanoid then
+		Humanoid.WalkSpeed = Settings.WalkSpeed
+	end
+end)
+
+--========================================================--
+-- CHECKPOINT SYSTEM
+--========================================================--
+
+local Checkpoint1
+local Checkpoint2
+local TeleportIndex = 1
+
+local function SaveCheckpoint(number)
+	if not Root or not Root.Parent then
+		return false
+	end
+
+	if number == 1 then
+		Checkpoint1 = Root.CFrame
+	elseif number == 2 then
+		Checkpoint2 = Root.CFrame
+	end
+
+	return true
+end
+
+local function ResetCheckpoints()
+	Checkpoint1 = nil
+	Checkpoint2 = nil
+	TeleportIndex = 1
+end
+
+local function TeleportCheckpoint()
+	if not Root or not Root.Parent then
+		return false
+	end
+
+	-- Normal cycle:
+	-- CP1 → CP2 → CP1 → CP2
+	if TeleportIndex == 1 then
+
+		if Checkpoint1 then
+			Root.CFrame = Checkpoint1
+			TeleportIndex = 2
+			return true
+		elseif Checkpoint2 then
+			Root.CFrame = Checkpoint2
+			TeleportIndex = 1
+			return true
+		end
+
+	else
+
+		if Checkpoint2 then
+			Root.CFrame = Checkpoint2
+			TeleportIndex = 1
+			return true
+		elseif Checkpoint1 then
+			Root.CFrame = Checkpoint1
+			TeleportIndex = 2
+			return true
+		end
+
+	end
+
+	return false
+end
+
+--========================================================--
+-- MAIN SCALE
+--========================================================--
+
+local MainScale = Instance.new("UIScale")
+MainScale.Scale = Settings.GUIScale
+
+--========================================================--
+-- MAIN WINDOW
+--========================================================--
+
+local Main = New("Frame", {
+	Name = "Main",
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(490, 300),
+
+	BackgroundColor3 = Theme.Background,
+	BorderSizePixel = 0,
+
+	Visible = false,
+	Active = true,
+}, Gui)
+
+MainScale.Parent = Main
+
+Corner(Main, 17)
+
+local MainStroke = Stroke(
+	Main,
+	Theme.Violet,
+	0.2,
+	1.4
+)
+
+Gradient(
+	Main,
+	{
+		Color3.fromRGB(18, 14, 32),
+		Color3.fromRGB(8, 8, 16)
+	},
+	90
+)
+
+--========================================================--
+-- AURA
+--========================================================--
+
+local Aura1 = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(1, 18, 1, 18),
+
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+
+	ZIndex = 0,
+}, Main)
+
+Corner(Aura1, 23)
+
+local AuraStroke1 = Stroke(
+	Aura1,
+	Theme.Violet,
+	0.88,
+	2
+)
+
+local Aura2 = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(1, 32, 1, 32),
+
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+
+	ZIndex = 0,
+}, Main)
+
+Corner(Aura2, 28)
+
+local AuraStroke2 = Stroke(
+	Aura2,
+	Theme.Blue,
+	0.93,
+	2
+)
+
+-- Animated aura breathing
+task.spawn(function()
+	while Gui.Parent do
+		Tween(
+			AuraStroke1,
+			{Transparency = 0.94},
+			TweenInfo.new(
+				1.4,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		Tween(
+			AuraStroke2,
+			{Transparency = 0.97},
+			TweenInfo.new(
+				1.6,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		task.wait(1.4)
+
+		Tween(
+			AuraStroke1,
+			{Transparency = 0.84},
+			TweenInfo.new(
+				1.4,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		Tween(
+			AuraStroke2,
+			{Transparency = 0.90},
+			TweenInfo.new(
+				1.6,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		task.wait(1.4)
+	end
+end)
+
+--========================================================--
+-- HEADER
+--========================================================--
+
+local Header = New("Frame", {
+	Position = UDim2.fromOffset(0, 0),
+	Size = UDim2.new(1, 0, 0, 55),
+
+	BackgroundColor3 = Theme.Panel,
+	BorderSizePixel = 0,
+
+	Active = true,
+}, Main)
+
+Corner(Header, 17)
+
+local HeaderLine = New("Frame", {
+	Position = UDim2.new(0, 0, 1, -2),
+	Size = UDim2.new(1, 0, 0, 2),
+
+	BorderSizePixel = 0,
+	BackgroundColor3 = Theme.Violet,
+}, Header)
+
+Gradient(
+	HeaderLine,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo,
+		Theme.Blue
+	},
+	0
+)
+
+-- Logo
+local LogoHolder = New("Frame", {
+	Position = UDim2.fromOffset(12, 9),
+	Size = UDim2.fromOffset(37, 37),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+}, Header)
+
+Corner(LogoHolder, 11)
+Stroke(LogoHolder, Theme.Violet, 0.45, 1)
+
+local LogoImage = New("ImageLabel", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+
+	Size = UDim2.new(0.78, 0, 0.78, 0),
+
+	BackgroundTransparency = 1,
+
+	Image = "rbxassetid://95386622584308",
+	ImageColor3 = Theme.White,
+
+	ScaleType = Enum.ScaleType.Fit,
+}, LogoHolder)
+
+--========================================================--
+-- TITLE
+--========================================================--
+
+local Title = New("TextLabel", {
+	Position = UDim2.fromOffset(59, 8),
+	Size = UDim2.new(1, -160, 0, 22),
+
+	BackgroundTransparency = 1,
+
+	Text = "XYRIX",
+	TextColor3 = Theme.White,
+	TextSize = 17,
+
+	Font = Enum.Font.GothamBlack,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, Header)
+
+local Subtitle = New("TextLabel", {
+	Position = UDim2.fromOffset(60, 29),
+	Size = UDim2.new(1, -170, 0, 13),
+
+	BackgroundTransparency = 1,
+
+	Text = "PREMIUM CONTROL PANEL",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, Header)
+
+--========================================================--
+-- MINIMIZE / CLOSE
+--========================================================--
+
+local Minimize = New("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, -49, 0.5, 0),
+
+	Size = UDim2.fromOffset(30, 30),
+
+	BackgroundColor3 = Theme.Card,
+	BorderSizePixel = 0,
+
+	Text = "—",
+	TextColor3 = Theme.SoftWhite,
+	TextSize = 16,
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, Header)
+
+Corner(Minimize, 9)
+Stroke(Minimize, Theme.Stroke, 0.5, 1)
+
+local Close = New("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, -12, 0.5, 0),
+
+	Size = UDim2.fromOffset(30, 30),
+
+	BackgroundColor3 = Color3.fromRGB(48, 24, 43),
+	BorderSizePixel = 0,
+
+	Text = "×",
+	TextColor3 = Theme.Red,
+	TextSize = 19,
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, Header)
+
+Corner(Close, 9)
+Stroke(Close, Theme.Red, 0.65, 1)
+
+--========================================================--
+-- SIDEBAR (improved Zenith-style)
+--========================================================--
+
+local Sidebar = New("Frame", {
+	Position = UDim2.fromOffset(8, 62),
+	Size = UDim2.fromOffset(122, 230),
+
+	BackgroundColor3 = Theme.Panel,
+	BorderSizePixel = 0,
+}, Main)
+
+Corner(Sidebar, 16)
+Stroke(Sidebar, Theme.Violet, 0.72, 1.15)
+
+Gradient(
+	Sidebar,
+	{
+		Color3.fromRGB(24, 18, 44),
+		Color3.fromRGB(12, 10, 26),
+	},
+	110
+)
+
+--========================================================--
+-- SIDEBAR LOGO
+--========================================================--
+
+local SidebarLogoHolder = New("Frame", {
+	Position = UDim2.fromOffset(11, 10),
+	Size = UDim2.fromOffset(100, 42),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+}, Sidebar)
+
+Corner(SidebarLogoHolder, 12)
+Stroke(SidebarLogoHolder, Theme.Violet, 0.35, 1.5)
+
+Gradient(
+	SidebarLogoHolder,
+	{
+		Color3.fromRGB(55, 32, 95),
+		Color3.fromRGB(28, 22, 55),
+		Color3.fromRGB(20, 18, 42),
+	},
+	35
+)
+
+local SidebarLogo = New("ImageLabel", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(0.68, 0, 0.68, 0),
+
+	BackgroundTransparency = 1,
+	Image = "rbxassetid://95386622584308",
+	ImageColor3 = Theme.White,
+	ScaleType = Enum.ScaleType.Fit,
+}, SidebarLogoHolder)
+
+-- Soft glow under logo
+local LogoGlow = New("Frame", {
+	Position = UDim2.fromOffset(18, 54),
+	Size = UDim2.new(1, -36, 0, 6),
+	BackgroundColor3 = Theme.Violet,
+	BackgroundTransparency = 0.85,
+	BorderSizePixel = 0,
+}, Sidebar)
+Corner(LogoGlow, 100)
+
+-- Divider
+local SidebarDivider = New("Frame", {
+	Position = UDim2.fromOffset(14, 62),
+	Size = UDim2.new(1, -28, 0, 1),
+	BackgroundColor3 = Theme.Violet,
+	BackgroundTransparency = 0.55,
+	BorderSizePixel = 0,
+}, Sidebar)
+
+--========================================================--
+-- CONTENT AREA
+--========================================================--
+
+local Content = New("Frame", {
+	Position = UDim2.fromOffset(138, 62),
+	Size = UDim2.new(1, -147, 1, -72),
+
+	BackgroundTransparency = 1,
+}, Main)
+
+--========================================================--
+-- SIDEBAR BUTTONS
+--========================================================--
+
+local Pages = {}
+local PageButtons = {}
+
+local function CreatePage(name, icon, order)
+	local button = New("TextButton", {
+		Position = UDim2.fromOffset(8, 70 + ((order - 1) * 25)),
+		Size = UDim2.new(1, -16, 0, 23),
+
+		BackgroundColor3 = Color3.fromRGB(38, 28, 64),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+
+		Text = "",
+		AutoButtonColor = false,
+	}, Sidebar)
+
+	Corner(button, 9)
+
+	-- Full-height left accent
+	local accent = New("Frame", {
+		Position = UDim2.fromOffset(0, 3),
+		Size = UDim2.fromOffset(3, 17),
+		BackgroundColor3 = Theme.Violet,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, button)
+	Corner(accent, 2)
+
+	-- Subtle selected fill layer
+	local fill = New("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.fromRGB(48, 34, 82),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 0,
+	}, button)
+	Corner(fill, 9)
+
+	local iconLabel = New("TextLabel", {
+		Position = UDim2.fromOffset(11, 0),
+		Size = UDim2.fromOffset(20, 23),
+		BackgroundTransparency = 1,
+		Text = icon,
+		TextColor3 = Theme.Gray,
+		TextSize = 12,
+		Font = Enum.Font.GothamBold,
+		ZIndex = 2,
+	}, button)
+
+	local label = New("TextLabel", {
+		Position = UDim2.fromOffset(32, 0),
+		Size = UDim2.new(1, -38, 1, 0),
+		BackgroundTransparency = 1,
+		Text = name,
+		TextColor3 = Theme.Gray,
+		TextSize = 9,
+		Font = Enum.Font.GothamSemibold,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 2,
+	}, button)
+
+	local page = New("ScrollingFrame", {
+		Name = name,
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Theme.Violet,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		Visible = false,
+	}, Content)
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 7)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = page
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingBottom = UDim.new(0, 15)
+	padding.Parent = page
+
+	Pages[name] = page
+	PageButtons[name] = {
+		Button = button,
+		Icon = iconLabel,
+		Label = label,
+		Accent = accent,
+		Fill = fill,
+	}
+
+	return page
+end
+
+local MainPage = CreatePage("Main", "⌂", 1)
+local MovementPage = CreatePage("Movement", "✦", 2)
+local CheckpointPage = CreatePage("Checkpoints", "◆", 3)
+local SettingsPage = CreatePage("Settings", "⚙", 4)
+local VisualsPage = CreatePage("Visuals", "◈", 5)
+local ToolsPage = CreatePage("Tools", "⚒", 6)
+
+-- Footer tag on sidebar
+local SidebarFooter = New("TextLabel", {
+	Position = UDim2.new(0, 0, 1, -18),
+	Size = UDim2.new(1, 0, 0, 14),
+	BackgroundTransparency = 1,
+	Text = "XYRIX",
+	TextColor3 = Theme.DarkGray,
+	TextSize = 8,
+	Font = Enum.Font.GothamBold,
+	TextTransparency = 0.35,
+}, Sidebar)
+
+--========================================================--
+-- PAGE SWITCHING
+--========================================================--
+
+local CurrentPage
+
+local function ShowPage(name)
+	for pageName, page in pairs(Pages) do
+		local selected = pageName == name
+		page.Visible = selected
+
+		local data = PageButtons[pageName]
+
+		if selected then
+			Tween(data.Button, {
+				BackgroundTransparency = 0,
+				BackgroundColor3 = Color3.fromRGB(46, 32, 78),
+			}, Fast)
+			Tween(data.Fill, {BackgroundTransparency = 0.35}, Fast)
+			Tween(data.Icon, {TextColor3 = Theme.Cyan}, Fast)
+			Tween(data.Label, {TextColor3 = Theme.White}, Fast)
+			Tween(data.Accent, {
+				BackgroundTransparency = 0,
+				BackgroundColor3 = Theme.Cyan,
+			}, Fast)
+		else
+			Tween(data.Button, {
+				BackgroundTransparency = 1,
+				BackgroundColor3 = Color3.fromRGB(38, 28, 64),
+			}, Fast)
+			Tween(data.Fill, {BackgroundTransparency = 1}, Fast)
+			Tween(data.Icon, {TextColor3 = Theme.Gray}, Fast)
+			Tween(data.Label, {TextColor3 = Theme.Gray}, Fast)
+			Tween(data.Accent, {
+				BackgroundTransparency = 1,
+				BackgroundColor3 = Theme.Violet,
+			}, Fast)
+		end
+	end
+
+	CurrentPage = name
+end
+
+for name, data in pairs(PageButtons) do
+	data.Button.Activated:Connect(function()
+		ShowPage(name)
+	end)
+
+	data.Button.MouseEnter:Connect(function()
+		if CurrentPage ~= name then
+			Tween(data.Button, {
+				BackgroundTransparency = 0.35,
+				BackgroundColor3 = Color3.fromRGB(36, 28, 58),
+			}, Fast)
+			Tween(data.Icon, {TextColor3 = Theme.SoftWhite}, Fast)
+		end
+	end)
+
+	data.Button.MouseLeave:Connect(function()
+		if CurrentPage ~= name then
+			Tween(data.Button, {
+				BackgroundTransparency = 1,
+				BackgroundColor3 = Color3.fromRGB(38, 28, 64),
+			}, Fast)
+			Tween(data.Icon, {TextColor3 = Theme.Gray}, Fast)
+		end
+	end)
+end
+
+--========================================================--
+-- PAGE HELPERS
+--========================================================--
+
+local function Section(page, text)
+	local holder = New("Frame", {
+		Size = UDim2.new(1, -4, 0, 27),
+		BackgroundTransparency = 1,
+	}, page)
+
+	local label = New("TextLabel", {
+		Position = UDim2.fromOffset(2, 6),
+		Size = UDim2.new(1, -4, 0, 14),
+
+		BackgroundTransparency = 1,
+
+		Text = text,
+		TextColor3 = Theme.Gray,
+		TextSize = 9,
+
+		Font = Enum.Font.GothamBold,
+
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, holder)
+
+	return holder
+end
+
+local function Card(page, height)
+	local frame = New("Frame", {
+		Size = UDim2.new(1, -4, 0, height),
+
+		BackgroundColor3 = Theme.Card,
+		BorderSizePixel = 0,
+	}, page)
+
+	Corner(frame, 11)
+	Stroke(frame, Theme.Stroke, 0.65, 1)
+
+	return frame
+end
+
+--========================================================--
+-- TOGGLE
+--========================================================--
+
+local function CreateToggle(page, name, description, getter, setter)
+	local row = Card(page, 50)
+
+	local title = New("TextLabel", {
+		Position = UDim2.fromOffset(12, 6),
+		Size = UDim2.new(1, -75, 0, 18),
+
+		BackgroundTransparency = 1,
+
+		Text = name,
+		TextColor3 = Theme.White,
+		TextSize = 12,
+
+		Font = Enum.Font.GothamSemibold,
+
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, row)
+
+	local desc = New("TextLabel", {
+		Position = UDim2.fromOffset(12, 25),
+		Size = UDim2.new(1, -75, 0, 14),
+
+		BackgroundTransparency = 1,
+
+		Text = description,
+		TextColor3 = Theme.Gray,
+		TextSize = 8,
+
+		Font = Enum.Font.Gotham,
+
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, row)
+
+	local switch = New("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -11, 0.5, 0),
+
+		Size = UDim2.fromOffset(44, 23),
+
+		BackgroundColor3 = Theme.Off,
+		BorderSizePixel = 0,
+
+		Text = "",
+		AutoButtonColor = false,
+	}, row)
+
+	Corner(switch, 100)
+
+	local knob = New("Frame", {
+		Position = UDim2.fromOffset(3, 3),
+		Size = UDim2.fromOffset(17, 17),
+
+		BackgroundColor3 = Color3.fromRGB(190, 187, 205),
+		BorderSizePixel = 0,
+	}, switch)
+
+	Corner(knob, 100)
+
+	local function UpdateVisual(on)
+		if on then
+			Tween(
+				switch,
+				{BackgroundColor3 = Theme.Violet},
+				Fast
+			)
+
+			Tween(
+				knob,
+				{
+					Position = UDim2.new(1, -20, 0, 3),
+					BackgroundColor3 = Theme.White
+				},
+				Fast
+			)
+
+			Tween(
+				row,
+				{BackgroundColor3 = Color3.fromRGB(29, 23, 49)},
+				Fast
+			)
+		else
+			Tween(
+				switch,
+				{BackgroundColor3 = Theme.Off},
+				Fast
+			)
+
+			Tween(
+				knob,
+				{
+					Position = UDim2.fromOffset(3, 3),
+					BackgroundColor3 = Color3.fromRGB(190, 187, 205)
+				},
+				Fast
+			)
+
+			Tween(
+				row,
+				{BackgroundColor3 = Theme.Card},
+				Fast
+			)
+		end
+	end
+
+	UpdateVisual(getter())
+
+	switch.Activated:Connect(function()
+		local newState = not getter()
+
+		setter(newState)
+		UpdateVisual(newState)
+	end)
+
+	return {
+		SetVisual = UpdateVisual
+	}
+end
+
+--========================================================--
+-- MAIN PAGE
+--========================================================--
+
+Section(MainPage, "XYRIX CONTROL CENTER")
+
+local welcome = Card(MainPage, 62)
+
+local welcomeTitle = New("TextLabel", {
+	Position = UDim2.fromOffset(13, 8),
+	Size = UDim2.new(1, -26, 0, 22),
+
+	BackgroundTransparency = 1,
+
+	Text = "Welcome to Xyrix",
+	TextColor3 = Theme.White,
+	TextSize = 15,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, welcome)
+
+local welcomeText = New("TextLabel", {
+	Position = UDim2.fromOffset(13, 31),
+	Size = UDim2.new(1, -26, 0, 20),
+
+	BackgroundTransparency = 1,
+
+	Text = "Premium movement and utility controls.",
+	TextColor3 = Theme.Gray,
+	TextSize = 9,
+
+	Font = Enum.Font.Gotham,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, welcome)
+
+Section(MainPage, "QUICK STATUS")
+
+local statusCard = Card(MainPage, 70)
+
+local statusTitle = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 8),
+	Size = UDim2.new(1, -24, 0, 17),
+
+	BackgroundTransparency = 1,
+
+	Text = "SYSTEM STATUS",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, statusCard)
+
+local status = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 28),
+	Size = UDim2.new(1, -24, 0, 28),
+
+	BackgroundTransparency = 1,
+
+	Text = "All features are currently idle.",
+	TextColor3 = Theme.SoftWhite,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextWrapped = true,
+}, statusCard)
+
+--========================================================--
+-- MOVEMENT PAGE
+--========================================================--
+
+Section(MovementPage, "FLOAT")
+
+CreateToggle(
+	MovementPage,
+	"Float",
+	"Maintain a controlled floating height.",
+	function()
+		return Settings.Float
+	end,
+	SetFloat
+)
+
+local FloatCard = Card(MovementPage, 55)
+
+local FloatLabel = New("TextLabel", {
+	Position = UDim2.fromOffset(10, 7),
+	Size = UDim2.new(0.45, 0, 0, 17),
+
+	BackgroundTransparency = 1,
+
+	Text = "HEIGHT",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.GothamBold,
+}, FloatCard)
+
+local FloatBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 25),
+	Size = UDim2.new(0.45, -5, 0, 23),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = tostring(Settings.FloatHeight),
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, FloatCard)
+
+Corner(FloatBox, 7)
+
+local FloatSet = New("TextButton", {
+	Position = UDim2.new(0.5, 0, 0, 15),
+	Size = UDim2.new(0.46, -8, 0, 27),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "APPLY",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, FloatCard)
+
+Corner(FloatSet, 7)
+
+Gradient(
+	FloatSet,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+FloatSet.Activated:Connect(function()
+	local value = tonumber(FloatBox.Text)
+
+	if value and value > 0 and value < 300 then
+		Settings.FloatHeight = value
+
+		if Settings.Float then
+			StartFloat()
+		end
+
+		Tween(FloatSet, {
+			BackgroundColor3 = Theme.Green
+		})
+
+		task.delay(0.35, function()
+			if FloatSet and FloatSet.Parent then
+				Gradient(
+					FloatSet,
+					{
+						Theme.Violet,
+						Theme.Purple,
+						Theme.Indigo
+					},
+					0
+				)
+			end
+		end)
+	end
+end)
+
+Section(MovementPage, "INFINITE LIFT")
+
+CreateToggle(
+	MovementPage,
+	"Infinite Lift",
+	"Moves up. Timer TPs to CP1/CP2 and keeps lifting (loops).",
+	function()
+		return Settings.Lift
+	end,
+	SetLift
+)
+
+local LiftCard = Card(MovementPage, 55)
+
+local LiftBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 15),
+	Size = UDim2.new(0.45, -5, 0, 27),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = tostring(Settings.LiftSpeed),
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, LiftCard)
+
+Corner(LiftBox, 7)
+
+local LiftSet = New("TextButton", {
+	Position = UDim2.new(0.5, 0, 0, 15),
+	Size = UDim2.new(0.46, -8, 0, 27),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "SET SPEED",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, LiftCard)
+
+Corner(LiftSet, 7)
+
+Gradient(
+	LiftSet,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+LiftSet.Activated:Connect(function()
+	local value = tonumber(LiftBox.Text)
+
+	if value and value > 0 and value <= 15 then
+		Settings.LiftSpeed = value
+	end
+end)
+
+-- Custom timer with unit selector (0 = disabled)
+local LiftTimerCard = Card(MovementPage, 78)
+
+local LiftTimerLabel = New("TextLabel", {
+	Position = UDim2.fromOffset(10, 4),
+	Size = UDim2.new(1, -20, 0, 14),
+	BackgroundTransparency = 1,
+	Text = "AUTO-TP TIMER  •  0 = OFF",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+	Font = Enum.Font.GothamBold,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, LiftTimerCard)
+
+local LiftTimerBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 22),
+	Size = UDim2.new(0.28, 0, 0, 24),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = tostring(Settings.LiftTimerValue),
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, LiftTimerCard)
+
+Corner(LiftTimerBox, 7)
+
+-- Unit cycle button
+local LiftUnitButton = New("TextButton", {
+	Position = UDim2.new(0.30, 4, 0, 22),
+	Size = UDim2.new(0.38, -4, 0, 24),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = Settings.LiftTimerUnit or "Minutes",
+	TextColor3 = Theme.Cyan,
+	TextSize = 8,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, LiftTimerCard)
+
+Corner(LiftUnitButton, 7)
+Stroke(LiftUnitButton, Theme.Cyan, 0.7, 1)
+
+LiftUnitButton.Activated:Connect(function()
+	Settings.LiftTimerUnit = GetNextUnit(Settings.LiftTimerUnit or "Minutes")
+	LiftUnitButton.Text = Settings.LiftTimerUnit
+
+	if Settings.Lift then
+		StartLiftTimer()
+	end
+
+	status.Text = "Timer unit → " .. Settings.LiftTimerUnit
+end)
+
+local LiftTimerSet = New("TextButton", {
+	Position = UDim2.new(0.70, 0, 0, 22),
+	Size = UDim2.new(0.28, -6, 0, 24),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "APPLY",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, LiftTimerCard)
+
+Corner(LiftTimerSet, 7)
+
+Gradient(
+	LiftTimerSet,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+local LiftTimerHint = New("TextLabel", {
+	Position = UDim2.fromOffset(10, 50),
+	Size = UDim2.new(1, -20, 0, 22),
+	BackgroundTransparency = 1,
+	Text = "Tap unit to cycle: ns → µs → ms → sec → min → hr → day → wk → mo → yr → decade → century",
+	TextColor3 = Theme.DarkGray,
+	TextSize = 7,
+	Font = Enum.Font.Gotham,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextWrapped = true,
+}, LiftTimerCard)
+
+LiftTimerSet.Activated:Connect(function()
+	local value = tonumber(LiftTimerBox.Text)
+
+	if value and value >= 0 then
+		Settings.LiftTimerValue = value
+
+		if Settings.Lift then
+			StartLiftTimer()
+		end
+
+		if value == 0 then
+			status.Text = "Lift auto-TP timer disabled."
+		else
+			status.Text = "Lift auto-TP: " .. value .. " " .. (Settings.LiftTimerUnit or "Minutes")
+		end
+	end
+end)
+
+Section(MovementPage, "NOCLIP")
+
+CreateToggle(
+	MovementPage,
+	"Noclip",
+	"Disable character collision.",
+	function()
+		return Settings.Noclip
+	end,
+	SetNoclip
+)
+
+Section(MovementPage, "TPWALK")
+
+CreateToggle(
+	MovementPage,
+	"TPWalk",
+	"Move using the configured movement step.",
+	function()
+		return Settings.TPWalk
+	end,
+	SetTPWalk
+)
+
+local TPCard = Card(MovementPage, 55)
+
+local TPBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 15),
+	Size = UDim2.new(0.45, -5, 0, 27),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = tostring(Settings.TPWalkSpeed),
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, TPCard)
+
+Corner(TPBox, 7)
+
+local TPSet = New("TextButton", {
+	Position = UDim2.new(0.5, 0, 0, 15),
+	Size = UDim2.new(0.46, -8, 0, 27),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "SET SPEED",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, TPCard)
+
+Corner(TPSet, 7)
+
+Gradient(
+	TPSet,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+TPSet.Activated:Connect(function()
+	local value = tonumber(TPBox.Text)
+
+	if value and value > 0 and value <= 50 then
+		Settings.TPWalkSpeed = value
+	end
+end)
+
+Section(MovementPage, "INFINITE JUMP")
+
+CreateToggle(
+	MovementPage,
+	"Infinite Jump",
+	"Jump repeatedly without touching the ground.",
+	function()
+		return Settings.InfiniteJump
+	end,
+	SetInfiniteJump
+)
+
+Section(MovementPage, "WALK SPEED")
+
+local WalkCard = Card(MovementPage, 55)
+
+local WalkBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 15),
+	Size = UDim2.new(0.45, -5, 0, 27),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = tostring(Settings.WalkSpeed),
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, WalkCard)
+
+Corner(WalkBox, 7)
+
+local WalkSet = New("TextButton", {
+	Position = UDim2.new(0.5, 0, 0, 15),
+	Size = UDim2.new(0.46, -8, 0, 27),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "SET SPEED",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, WalkCard)
+
+Corner(WalkSet, 7)
+
+Gradient(
+	WalkSet,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+WalkSet.Activated:Connect(function()
+	local value = tonumber(WalkBox.Text)
+
+	if value and value >= 0 and value <= 200 then
+		SetWalkSpeed(value)
+	end
+end)
+
+--========================================================--
+-- CHECKPOINT PAGE
+--========================================================--
+
+Section(CheckpointPage, "CHECKPOINT SYSTEM")
+
+local CPStatus = Card(CheckpointPage, 58)
+
+local CPStatusText = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 8),
+	Size = UDim2.new(1, -24, 0, 18),
+	BackgroundTransparency = 1,
+	Text = "NO POINTS SAVED",
+	TextColor3 = Theme.Gray,
+	TextSize = 11,
+	Font = Enum.Font.GothamBold,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, CPStatus)
+
+local CPNext = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 30),
+	Size = UDim2.new(1, -24, 0, 16),
+	BackgroundTransparency = 1,
+	Text = "Next: CP1",
+	TextColor3 = Theme.SoftWhite,
+	TextSize = 9,
+	Font = Enum.Font.Gotham,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, CPStatus)
+
+local function RefreshCheckpointStatus()
+	local first = Checkpoint1 ~= nil
+	local second = Checkpoint2 ~= nil
+
+	if first and second then
+		CPStatusText.Text = "CP1 ✓   •   CP2 ✓"
+		CPStatusText.TextColor3 = Theme.Green
+	elseif first then
+		CPStatusText.Text = "CP1 ✓   •   CP2 empty"
+		CPStatusText.TextColor3 = Theme.Green
+	elseif second then
+		CPStatusText.Text = "CP1 empty   •   CP2 ✓"
+		CPStatusText.TextColor3 = Theme.Green
+	else
+		CPStatusText.Text = "NO POINTS SAVED"
+		CPStatusText.TextColor3 = Theme.Gray
+	end
+
+	CPNext.Text = "Next teleport → " .. (TeleportIndex == 1 and "CP1" or "CP2")
+end
+
+-- Cleaner side-by-side save buttons
+local CPSaveCard = Card(CheckpointPage, 52)
+
+local CP1Button = New("TextButton", {
+	Position = UDim2.fromOffset(8, 8),
+	Size = UDim2.new(0.48, -10, 0, 36),
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+	Text = "SAVE CP1",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, CPSaveCard)
+Corner(CP1Button, 8)
+
+local CP2Button = New("TextButton", {
+	Position = UDim2.new(0.52, 0, 0, 8),
+	Size = UDim2.new(0.48, -8, 0, 36),
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+	Text = "SAVE CP2",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, CPSaveCard)
+Corner(CP2Button, 8)
+
+CP1Button.Activated:Connect(function()
+	if SaveCheckpoint(1) then
+		TeleportIndex = 1
+		RefreshCheckpointStatus()
+		status.Text = "Checkpoint 1 saved."
+	end
+end)
+
+CP2Button.Activated:Connect(function()
+	if SaveCheckpoint(2) then
+		RefreshCheckpointStatus()
+		status.Text = "Checkpoint 2 saved."
+	end
+end)
+
+local TeleportCard = Card(CheckpointPage, 52)
+
+local TeleportButton = New("TextButton", {
+	Position = UDim2.fromOffset(8, 8),
+	Size = UDim2.new(1, -16, 0, 36),
+	BackgroundColor3 = Theme.Violet,
+	BorderSizePixel = 0,
+	Text = "TELEPORT TO NEXT",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, TeleportCard)
+Corner(TeleportButton, 8)
+Gradient(TeleportButton, {Theme.Violet, Theme.Purple, Theme.Indigo}, 0)
+
+TeleportButton.Activated:Connect(function()
+	if TeleportCheckpoint() then
+		RefreshCheckpointStatus()
+		status.Text = "Teleported."
+
+		Tween(TeleportButton, {BackgroundColor3 = Theme.Green}, Fast)
+		task.delay(0.25, function()
+			if TeleportButton and TeleportButton.Parent then
+				Gradient(TeleportButton, {Theme.Violet, Theme.Purple, Theme.Indigo}, 0)
+			end
+		end)
+	else
+		status.Text = "No checkpoint saved."
+	end
+end)
+
+local ResetCPCard = Card(CheckpointPage, 52)
+
+local ResetCPButton = New("TextButton", {
+	Position = UDim2.fromOffset(8, 8),
+	Size = UDim2.new(1, -16, 0, 36),
+
+	BackgroundColor3 = Color3.fromRGB(52, 27, 43),
+	BorderSizePixel = 0,
+
+	Text = "RESET CHECKPOINTS",
+	TextColor3 = Theme.Red,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, ResetCPCard)
+
+Corner(ResetCPButton, 8)
+
+ResetCPButton.Activated:Connect(function()
+	ResetCheckpoints()
+	RefreshCheckpointStatus()
+end)
+
+--========================================================--
+-- SETTINGS PAGE
+--========================================================--
+
+Section(SettingsPage, "INTERFACE")
+
+local ScaleCard = Card(SettingsPage, 85)
+
+local ScaleTitle = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 7),
+	Size = UDim2.new(1, -24, 0, 17),
+
+	BackgroundTransparency = 1,
+
+	Text = "GUI SIZE",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, ScaleCard)
+
+local ScaleValue = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 25),
+	Size = UDim2.new(1, -24, 0, 15),
+
+	BackgroundTransparency = 1,
+
+	Text = "82%",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.Gotham,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, ScaleCard)
+
+local ScaleBar = New("Frame", {
+	Position = UDim2.fromOffset(12, 50),
+	Size = UDim2.new(1, -24, 0, 7),
+
+	BackgroundColor3 = Theme.Off,
+	BorderSizePixel = 0,
+}, ScaleCard)
+
+Corner(ScaleBar, 100)
+
+local ScaleFill = New("Frame", {
+	Size = UDim2.new(
+		(Settings.GUIScale - 0.6) / 0.6,
+		0,
+		1,
+		0
+	),
+
+	BackgroundColor3 = Theme.Violet,
+	BorderSizePixel = 0,
+}, ScaleBar)
+
+Corner(ScaleFill, 100)
+
+local ScaleKnob = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+
+	Position = UDim2.new(
+		(Settings.GUIScale - 0.6) / 0.6,
+		0,
+		0.5,
+		0
+	),
+
+	Size = UDim2.fromOffset(13, 13),
+
+	BackgroundColor3 = Theme.White,
+	BorderSizePixel = 0,
+}, ScaleBar)
+
+Corner(ScaleKnob, 100)
+
+local draggingScale = false
+
+local function UpdateScaleFromX(x)
+	local relative =
+		math.clamp(
+			(x - ScaleBar.AbsolutePosition.X)
+				/ ScaleBar.AbsoluteSize.X,
+			0,
+			1
+		)
+
+	local value =
+		math.floor(
+			(0.6 + relative * 0.6) * 100
+		) / 100
+
+	Settings.GUIScale = value
+
+	ScaleValue.Text =
+		tostring(
+			math.floor(value * 100)
+		) .. "%"
+
+	local position = (value - 0.6) / 0.6
+
+	ScaleFill.Size =
+		UDim2.new(position, 0, 1, 0)
+
+	ScaleKnob.Position =
+		UDim2.new(position, 0, 0.5, 0)
+
+	Tween(
+		MainScale,
+		{Scale = value},
+		Fast
+	)
+end
+
+ScaleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		draggingScale = true
+		UpdateScaleFromX(input.Position.X)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if draggingScale then
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			UpdateScaleFromX(input.Position.X)
+		end
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		draggingScale = false
+	end
+end)
+
+--========================================================--
+-- SAVE / RESET
+--========================================================--
+
+Section(SettingsPage, "PROFILE")
+
+local SaveCard = Card(SettingsPage, 105)
+
+local SaveInfo = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 7),
+	Size = UDim2.new(1, -24, 0, 28),
+
+	BackgroundTransparency = 1,
+
+	Text = "Save your current interface preferences\nfor this running session.",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.Gotham,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextWrapped = true,
+}, SaveCard)
+
+local SaveButton = New("TextButton", {
+	Position = UDim2.fromOffset(12, 43),
+	Size = UDim2.new(0.47, -6, 0, 37),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "SAVE SETTINGS",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, SaveCard)
+
+Corner(SaveButton, 8)
+
+Gradient(
+	SaveButton,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+local ResetButton = New("TextButton", {
+	Position = UDim2.new(0.53, 0, 0, 43),
+	Size = UDim2.new(0.47, -12, 0, 37),
+
+	BackgroundColor3 = Color3.fromRGB(52, 27, 43),
+	BorderSizePixel = 0,
+
+	Text = "RESET DEFAULTS",
+	TextColor3 = Theme.Red,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, SaveCard)
+
+Corner(ResetButton, 8)
+
+-- Session snapshot
+local SavedSettings = {}
+
+local function SaveSettings()
+	for key, value in pairs(Settings) do
+		SavedSettings[key] = value
+	end
+end
+
+local function RestoreDefaults()
+	SetFloat(false)
+	SetLift(false)
+	SetNoclip(false)
+	SetTPWalk(false)
+	SetInfiniteJump(false)
+
+	for key, value in pairs(Defaults) do
+		Settings[key] = value
+	end
+
+	FloatBox.Text = tostring(Settings.FloatHeight)
+	LiftBox.Text = tostring(Settings.LiftSpeed)
+	LiftTimerBox.Text = tostring(Settings.LiftTimerValue)
+	if LiftUnitButton then
+		LiftUnitButton.Text = Settings.LiftTimerUnit or "Minutes"
+	end
+	TPBox.Text = tostring(Settings.TPWalkSpeed)
+	WalkBox.Text = tostring(Settings.WalkSpeed)
+
+	ApplyWalkSpeed()
+
+	Tween(
+		MainScale,
+		{Scale = Settings.GUIScale},
+		Smooth
+	)
+
+	ScaleValue.Text =
+		tostring(
+			math.floor(Settings.GUIScale * 100)
+		) .. "%"
+
+	local position =
+		(Settings.GUIScale - 0.6) / 0.6
+
+	ScaleFill.Size =
+		UDim2.new(position, 0, 1, 0)
+
+	ScaleKnob.Position =
+		UDim2.new(position, 0, 0.5, 0)
+
+	ResetCheckpoints()
+	RefreshCheckpointStatus()
+end
+
+SaveButton.Activated:Connect(function()
+	SaveSettings()
+
+	Tween(
+		SaveButton,
+		{BackgroundColor3 = Theme.Green},
+		Fast
+	)
+
+	SaveInfo.Text =
+		"Settings saved for this running session."
+
+	task.delay(0.5, function()
+		Gradient(
+			SaveButton,
+			{
+				Theme.Violet,
+				Theme.Purple,
+				Theme.Indigo
+			},
+			0
+		)
+
+		SaveInfo.Text =
+			"Save your current interface preferences\nfor this running session."
+	end)
+end)
+
+ResetButton.Activated:Connect(function()
+	RestoreDefaults()
+
+	Tween(
+		ResetButton,
+		{BackgroundColor3 = Theme.Violet},
+		Fast
+	)
+
+	task.delay(0.3, function()
+		Tween(
+			ResetButton,
+			{BackgroundColor3 = Color3.fromRGB(52, 27, 43)},
+			Fast
+		)
+	end)
+end)
+
+--========================================================--
+-- DRAGGING
+--========================================================--
+
+local function MakeDraggable(object, handle)
+	local dragging = false
+	local dragStart
+	local startPosition
+	local dragInput
+
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragging = true
+			dragStart = input.Position
+			startPosition = object.Position
+			dragInput = input
+		end
+	end)
+
+	handle.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and input == dragInput then
+
+			local delta =
+				input.Position - dragStart
+
+			object.Position = UDim2.new(
+				startPosition.X.Scale,
+				startPosition.X.Offset + delta.X,
+
+				startPosition.Y.Scale,
+				startPosition.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragging = false
+		end
+	end)
+end
+
+MakeDraggable(Main, Header)
+
+--========================================================--
+-- FLOATING CIRCLE
+--========================================================--
+
+local Circle = New("TextButton", {
+	Name = "XyrixCircle",
+
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -20, 0.17, 0),
+
+	Size = UDim2.fromOffset(52, 52),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = "",
+	AutoButtonColor = false,
+
+	Active = true,
+	ZIndex = 100,
+}, Gui)
+
+Corner(Circle, 100)
+
+local CircleStroke = Stroke(
+	Circle,
+	Theme.Violet,
+	0.08,
+	2.2
+)
+
+Gradient(
+	Circle,
+	{
+		Color3.fromRGB(35, 20, 60),
+		Color3.fromRGB(21, 25, 58),
+		Color3.fromRGB(15, 21, 43)
+	},
+	45
+)
+
+--========================================================--
+-- CIRCLE AURAS
+--========================================================--
+
+local CircleAura = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+
+	Position = UDim2.fromScale(0.5, 0.5),
+
+	Size = UDim2.new(1, 8, 1, 8),
+
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+
+	ZIndex = 99,
+}, Circle)
+
+Corner(CircleAura, 100)
+
+local CircleAuraStroke = Stroke(
+	CircleAura,
+	Theme.Violet,
+	0.82,
+	2
+)
+
+local CircleAura2 = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+
+	Position = UDim2.fromScale(0.5, 0.5),
+
+	Size = UDim2.new(1, 17, 1, 17),
+
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+
+	ZIndex = 98,
+}, Circle)
+
+Corner(CircleAura2, 100)
+
+local CircleAuraStroke2 = Stroke(
+	CircleAura2,
+	Theme.Blue,
+	0.92,
+	2
+)
+
+--========================================================--
+-- CIRCLE IMAGE
+--========================================================--
+
+local CircleImage = New("ImageLabel", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+
+	Position = UDim2.fromScale(0.5, 0.5),
+
+	Size = UDim2.new(0.63, 0, 0.63, 0),
+
+	BackgroundTransparency = 1,
+
+	Image = "rbxassetid://95386622584308",
+
+	ImageColor3 = Theme.White,
+
+	ScaleType = Enum.ScaleType.Fit,
+
+	ZIndex = 101,
+}, Circle)
+
+--========================================================--
+-- CIRCLE ANIMATION
+--========================================================--
+
+local CircleRotationRunning = false
+local CircleRotation = 0
+
+task.spawn(function()
+	while Gui.Parent do
+
+		Tween(
+			CircleAuraStroke,
+			{Transparency = 0.92},
+			TweenInfo.new(
+				1.2,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		Tween(
+			CircleAuraStroke2,
+			{Transparency = 0.97},
+			TweenInfo.new(
+				1.4,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		task.wait(1.2)
+
+		Tween(
+			CircleAuraStroke,
+			{Transparency = 0.72},
+			TweenInfo.new(
+				1.2,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		Tween(
+			CircleAuraStroke2,
+			{Transparency = 0.88},
+			TweenInfo.new(
+				1.4,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		task.wait(1.2)
+	end
+end)
+
+-- Smooth continuous logo rotation while open.
+RunService.RenderStepped:Connect(function(dt)
+	if CircleRotationRunning then
+		CircleRotation += dt * 120
+		CircleImage.Rotation = CircleRotation
+	end
+end)
+
+--========================================================--
+-- OPEN / CLOSE
+--========================================================--
+
+local Open = false
+local Animating = false
+
+local function OpenMain()
+	if Open or Animating then
+		return
+	end
+
+	Animating = true
+	Open = true
+
+	Main.Visible = true
+
+	Main.Size = UDim2.fromOffset(430, 260)
+
+	Tween(
+		Main,
+		{Size = UDim2.fromOffset(490, 300)},
+		Spring
+	)
+
+	CircleRotationRunning = true
+
+	Tween(
+		CircleStroke,
+		{
+			Color = Theme.Green,
+			Thickness = 3
+		},
+		Smooth
+	)
+
+	Tween(
+		CircleImage,
+		{
+			ImageColor3 = Theme.Green
+		},
+		Smooth
+	)
+
+	Tween(
+		CircleAuraStroke,
+		{
+			Color = Theme.Green
+		},
+		Smooth
+	)
+
+	task.delay(0.4, function()
+		Animating = false
+	end)
+end
+
+local function CloseMain()
+	if not Open or Animating then
+		return
+	end
+
+	Animating = true
+	Open = false
+
+	CircleRotationRunning = false
+
+	Tween(
+		Main,
+		{Size = UDim2.fromOffset(430, 260)},
+		TweenInfo.new(
+			0.2,
+			Enum.EasingStyle.Quint,
+			Enum.EasingDirection.In
+		)
+	)
+
+	Tween(
+		CircleStroke,
+		{
+			Color = Theme.Violet,
+			Thickness = 2.2
+		},
+		Smooth
+	)
+
+	Tween(
+		CircleImage,
+		{
+			ImageColor3 = Theme.White
+		},
+		Smooth
+	)
+
+	Tween(
+		CircleAuraStroke,
+		{
+			Color = Theme.Violet
+		},
+		Smooth
+	)
+
+	task.delay(0.2, function()
+		if not Open then
+			Main.Visible = false
+		end
+
+		Animating = false
+	end)
+end
+
+Circle.Activated:Connect(function()
+	if Open then
+		CloseMain()
+	else
+		OpenMain()
+	end
+end)
+
+Close.Activated:Connect(CloseMain)
+
+-- Minimize returns to circle.
+Minimize.Activated:Connect(CloseMain)
+
+--========================================================--
+-- CIRCLE DRAGGING WITHOUT BREAKING TAP
+--========================================================--
+
+local CircleDragging = false
+local CircleMoved = false
+local CircleDragStart
+local CircleStartPosition
+
+Circle.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		CircleDragging = true
+		CircleMoved = false
+
+		CircleDragStart = input.Position
+		CircleStartPosition = Circle.Position
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not CircleDragging then
+		return
+	end
+
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement
+		and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+
+	local delta =
+		input.Position - CircleDragStart
+
+	if delta.Magnitude > 8 then
+		CircleMoved = true
+	end
+
+	Circle.Position = UDim2.new(
+		CircleStartPosition.X.Scale,
+		CircleStartPosition.X.Offset + delta.X,
+
+		CircleStartPosition.Y.Scale,
+		CircleStartPosition.Y.Offset + delta.Y
+	)
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		CircleDragging = false
+	end
+end)
+
+--========================================================--
+-- VISUALS PAGE
+--========================================================--
+
+Section(VisualsPage, "WORLD VISUALS")
+
+local Lighting = game:GetService("Lighting")
+
+local VisualState = {
+	NoFog = false,
+	NoGlobalShadows = false,
+	FullBright = false,
+	ColorCorrection = false,
+	Bloom = false,
+}
+
+local SavedLighting = {
+	FogEnd = Lighting.FogEnd,
+	FogStart = Lighting.FogStart,
+	GlobalShadows = Lighting.GlobalShadows,
+	Brightness = Lighting.Brightness,
+	Ambient = Lighting.Ambient,
+	OutdoorAmbient = Lighting.OutdoorAmbient,
+}
+
+local ColorCorrection = Lighting:FindFirstChild("XyrixColorCorrection")
+if not ColorCorrection then
+	ColorCorrection = Instance.new("ColorCorrectionEffect")
+	ColorCorrection.Name = "XyrixColorCorrection"
+	ColorCorrection.Enabled = false
+	ColorCorrection.Parent = Lighting
+end
+
+local Bloom = Lighting:FindFirstChild("XyrixBloom")
+if not Bloom then
+	Bloom = Instance.new("BloomEffect")
+	Bloom.Name = "XyrixBloom"
+	Bloom.Enabled = false
+	Bloom.Intensity = 0.35
+	Bloom.Size = 24
+	Bloom.Threshold = 1
+	Bloom.Parent = Lighting
+end
+
+local function RestoreLighting()
+	Lighting.FogEnd = SavedLighting.FogEnd
+	Lighting.FogStart = SavedLighting.FogStart
+	Lighting.GlobalShadows = SavedLighting.GlobalShadows
+	Lighting.Brightness = SavedLighting.Brightness
+	Lighting.Ambient = SavedLighting.Ambient
+	Lighting.OutdoorAmbient = SavedLighting.OutdoorAmbient
+	ColorCorrection.Enabled = false
+	Bloom.Enabled = false
+end
+
+CreateToggle(
+	VisualsPage,
+	"No Fog",
+	"Removes distant fog while enabled.",
+	function() return VisualState.NoFog end,
+	function(on)
+		VisualState.NoFog = on
+		Lighting.FogEnd = on and math.huge or SavedLighting.FogEnd
+		Lighting.FogStart = on and 0 or SavedLighting.FogStart
+	end
+)
+
+CreateToggle(
+	VisualsPage,
+	"No Global Shadows",
+	"Disables the global shadow system.",
+	function() return VisualState.NoGlobalShadows end,
+	function(on)
+		VisualState.NoGlobalShadows = on
+		Lighting.GlobalShadows = not on and SavedLighting.GlobalShadows or false
+	end
+)
+
+CreateToggle(
+	VisualsPage,
+	"FullBright",
+	"Keeps the scene brighter and easier to see.",
+	function() return VisualState.FullBright end,
+	function(on)
+		VisualState.FullBright = on
+		if on then
+			Lighting.Brightness = 2
+			Lighting.Ambient = Color3.fromRGB(150,150,150)
+			Lighting.OutdoorAmbient = Color3.fromRGB(150,150,150)
+		else
+			Lighting.Brightness = SavedLighting.Brightness
+			Lighting.Ambient = SavedLighting.Ambient
+			Lighting.OutdoorAmbient = SavedLighting.OutdoorAmbient
+		end
+	end
+)
+
+CreateToggle(
+	VisualsPage,
+	"Color Boost",
+	"Adds a subtle contrast and saturation boost.",
+	function() return VisualState.ColorCorrection end,
+	function(on)
+		VisualState.ColorCorrection = on
+		ColorCorrection.Enabled = on
+		if on then
+			ColorCorrection.Brightness = 0.03
+			ColorCorrection.Contrast = 0.12
+			ColorCorrection.Saturation = 0.10
+			ColorCorrection.TintColor = Color3.fromRGB(240,235,255)
+		end
+	end
+)
+
+CreateToggle(
+	VisualsPage,
+	"Bloom",
+	"Adds a soft glow to bright areas.",
+	function() return VisualState.Bloom end,
+	function(on)
+		VisualState.Bloom = on
+		Bloom.Enabled = on
+	end
+)
+
+local RestoreVisualsCard = Card(VisualsPage, 56)
+local RestoreVisualsButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Theme.CardHover,
+	BorderSizePixel = 0,
+	Text = "RESTORE ROBLOX LIGHTING",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, RestoreVisualsCard)
+Corner(RestoreVisualsButton, 8)
+RestoreVisualsButton.Activated:Connect(function()
+	VisualState.NoFog = false
+	VisualState.NoGlobalShadows = false
+	VisualState.FullBright = false
+	VisualState.ColorCorrection = false
+	VisualState.Bloom = false
+	RestoreLighting()
+end)
+
+--========================================================--
+-- TOOLS PAGE
+--========================================================--
+
+Section(ToolsPage, "ANTI AFK")
+
+local AntiAFKState = false
+local AntiAFKConnection
+
+local function SetAntiAFK(value)
+	AntiAFKState = value
+
+	if AntiAFKConnection then
+		AntiAFKConnection:Disconnect()
+		AntiAFKConnection = nil
+	end
+
+	if value then
+		-- VirtualUser is the most reliable method used by popular hubs
+		local VirtualUser = game:GetService("VirtualUser")
+
+		AntiAFKConnection = Player.Idled:Connect(function()
+			VirtualUser:CaptureController()
+			VirtualUser:ClickButton2(Vector2.new())
+		end)
+
+		status.Text = "Anti-AFK enabled."
+	else
+		status.Text = "Anti-AFK disabled."
+	end
+end
+
+CreateToggle(
+	ToolsPage,
+	"Anti-AFK",
+	"Prevents Roblox from kicking you for being idle.",
+	function()
+		return AntiAFKState
+	end,
+	SetAntiAFK
+)
+
+Section(ToolsPage, "CLICK TELEPORT")
+
+local ClickTPState = false
+local ClickTPConnection
+local Mouse = Player:GetMouse()
+
+local function SetClickTP(value)
+	ClickTPState = value
+
+	if ClickTPConnection then
+		ClickTPConnection:Disconnect()
+		ClickTPConnection = nil
+	end
+
+	if value then
+		ClickTPConnection = Mouse.Button1Down:Connect(function()
+			if not ClickTPState then return end
+			if not Root or not Root.Parent then return end
+
+			-- Hold Ctrl / Cmd while clicking to teleport
+			if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+				or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+				or UserInputService:IsKeyDown(Enum.KeyCode.LeftMeta)
+				or UserInputService:IsKeyDown(Enum.KeyCode.RightMeta) then
+
+				local target = Mouse.Hit
+				if target then
+					Root.CFrame = CFrame.new(target.Position + Vector3.new(0, 3, 0))
+				end
+			end
+		end)
+
+		status.Text = "Click TP ready (Ctrl + Click)."
+	else
+		status.Text = "Click TP disabled."
+	end
+end
+
+CreateToggle(
+	ToolsPage,
+	"Click Teleport",
+	"Hold Ctrl and click anywhere to teleport.",
+	function()
+		return ClickTPState
+	end,
+	SetClickTP
+)
+
+Section(ToolsPage, "SERVER")
+
+local RejoinCard = Card(ToolsPage, 56)
+local RejoinButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Theme.Card,
+	BorderSizePixel = 0,
+	Text = "REJOIN SERVER",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, RejoinCard)
+Corner(RejoinButton, 8)
+RejoinButton.Activated:Connect(function()
+	status.Text = "Rejoining..."
+	pcall(function()
+		game:GetService("TeleportService"):TeleportToPlaceInstance(
+			game.PlaceId,
+			game.JobId,
+			Player
+		)
+	end)
+end)
+
+local ServerHopCard = Card(ToolsPage, 56)
+local ServerHopButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+	Text = "SERVER HOP",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, ServerHopCard)
+Corner(ServerHopButton, 8)
+Gradient(ServerHopButton, {Theme.Violet, Theme.Purple, Theme.Indigo}, 0)
+
+ServerHopButton.Activated:Connect(function()
+	status.Text = "Finding new server..."
+
+	task.spawn(function()
+		local success, result = pcall(function()
+			local HttpService = game:GetService("HttpService")
+			local TeleportService = game:GetService("TeleportService")
+
+			local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+			local response = game:HttpGet(url)
+			local data = HttpService:JSONDecode(response)
+
+			if data and data.data then
+				for _, server in ipairs(data.data) do
+					if server.playing < server.maxPlayers and server.id ~= game.JobId then
+						TeleportService:TeleportToPlaceInstance(game.PlaceId, server.id, Player)
+						return
+					end
+				end
+			end
+
+			status.Text = "No available servers found."
+		end)
+
+		if not success then
+			status.Text = "Server hop failed (executor limitation)."
+		end
+	end)
+end)
+
+Section(ToolsPage, "UTILITY")
+
+local CharacterResetCard = Card(ToolsPage, 56)
+local CharacterResetButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Theme.Card,
+	BorderSizePixel = 0,
+	Text = "REFRESH CHARACTER REFERENCES",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, CharacterResetCard)
+Corner(CharacterResetButton, 8)
+CharacterResetButton.Activated:Connect(function()
+	pcall(UpdateCharacter)
+	status.Text = "Character references refreshed."
+end)
+
+local StopAllCard = Card(ToolsPage, 56)
+local StopAllButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Color3.fromRGB(52, 27, 43),
+	BorderSizePixel = 0,
+	Text = "STOP ACTIVE MOVEMENT FEATURES",
+	TextColor3 = Theme.Red,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, StopAllCard)
+Corner(StopAllButton, 8)
+StopAllButton.Activated:Connect(function()
+	SetFloat(false)
+	SetLift(false)
+	SetNoclip(false)
+	SetTPWalk(false)
+	SetInfiniteJump(false)
+	SetClickTP(false)
+	status.Text = "Active movement features stopped."
+end)
+
+local ResetLightingCard = Card(ToolsPage, 56)
+local ResetLightingButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Theme.Card,
+	BorderSizePixel = 0,
+	Text = "RESET VISUAL MODIFIERS",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, ResetLightingCard)
+Corner(ResetLightingButton, 8)
+ResetLightingButton.Activated:Connect(RestoreLighting)
+
+Section(ToolsPage, "RENDER / QUALITY")
+
+--[[
+	When you fly very high, Roblox streams the map out → lag spikes + enemies catch up.
+	These controls force higher quality and try to keep more of the world loaded.
+]]
+
+local RenderState = {
+	MaxQuality = false,
+	HighStream = false,
+}
+
+local SavedRender = {
+	QualityLevel = nil,
+	MeshPartDetailLevel = nil,
+	EagerBulkExecution = nil,
+	StreamingMinRadius = nil,
+	StreamingTargetRadius = nil,
+}
+
+local function ApplyMaxQuality(on)
+	local ok, err = pcall(function()
+		local s = settings()
+		local rendering = s.Rendering
+
+		if on then
+			if SavedRender.QualityLevel == nil then
+				SavedRender.QualityLevel = rendering.QualityLevel
+			end
+			-- Highest fixed quality
+			rendering.QualityLevel = Enum.QualityLevel.Level21
+
+			pcall(function()
+				rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level04
+			end)
+			pcall(function()
+				rendering.EagerBulkExecution = true
+			end)
+			pcall(function()
+				rendering.EditQualityLevel = Enum.QualityLevel.Level21
+			end)
+		else
+			if SavedRender.QualityLevel ~= nil then
+				rendering.QualityLevel = SavedRender.QualityLevel
+			else
+				rendering.QualityLevel = Enum.QualityLevel.Automatic
+			end
+		end
+	end)
+
+	if not ok and status then
+		status.Text = "Max Quality failed: " .. tostring(err)
+	end
+end
+
+CreateToggle(
+	ToolsPage,
+	"Max Quality",
+	"Forces highest graphics (Level 21). Better map detail when high up.",
+	function()
+		return RenderState.MaxQuality
+	end,
+	function(on)
+		RenderState.MaxQuality = on
+		ApplyMaxQuality(on)
+		status.Text = on and "Max Quality ON (Level 21)." or "Max Quality OFF."
+	end
+)
+
+CreateToggle(
+	ToolsPage,
+	"Stream Keep-Alive",
+	"While lifting, re-requests map stream every 2s (cuts hitch/pause).",
+	function()
+		return StreamKeepAliveEnabled
+	end,
+	function(on)
+		StreamKeepAliveEnabled = on
+		if on and Settings.Lift then
+			StartStreamKeepAlive()
+		else
+			StopStreamKeepAlive()
+		end
+		status.Text = on and "Stream Keep-Alive ON." or "Stream Keep-Alive OFF."
+	end
+)
+
+-- Streaming radius: keeps more of the map loaded while flying
+local StreamCard = Card(ToolsPage, 92)
+
+local StreamTitle = New("TextLabel", {
+	Position = UDim2.fromOffset(10, 4),
+	Size = UDim2.new(1, -20, 0, 14),
+	BackgroundTransparency = 1,
+	Text = "STREAMING RADIUS (studs) — keeps map loaded high up",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+	Font = Enum.Font.GothamBold,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, StreamCard)
+
+local StreamBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 22),
+	Size = UDim2.new(0.45, -5, 0, 26),
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+	Text = "2048",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+	Font = Enum.Font.GothamMedium,
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, StreamCard)
+Corner(StreamBox, 7)
+
+local StreamApply = New("TextButton", {
+	Position = UDim2.new(0.5, 0, 0, 22),
+	Size = UDim2.new(0.46, -8, 0, 26),
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+	Text = "APPLY RADIUS",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, StreamCard)
+Corner(StreamApply, 7)
+Gradient(StreamApply, {Theme.Violet, Theme.Purple, Theme.Indigo}, 0)
+
+local StreamHint = New("TextLabel", {
+	Position = UDim2.fromOffset(10, 54),
+	Size = UDim2.new(1, -20, 0, 32),
+	BackgroundTransparency = 1,
+	Text = "Try 1024–4096. Higher = more map stays loaded while lifting.\nSome games lock streaming (then only Max Quality helps).",
+	TextColor3 = Theme.DarkGray,
+	TextSize = 7,
+	Font = Enum.Font.Gotham,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextWrapped = true,
+}, StreamCard)
+
+local function ApplyStreamingRadius(radius)
+	radius = math.clamp(tonumber(radius) or 2048, 64, 16384)
+
+	local ok, err = pcall(function()
+		local ws = workspace
+
+		-- Save originals once
+		if SavedRender.StreamingMinRadius == nil then
+			pcall(function()
+				SavedRender.StreamingMinRadius = ws.StreamingMinRadius
+				SavedRender.StreamingTargetRadius = ws.StreamingTargetRadius
+			end)
+		end
+
+		-- These only work if the place has StreamingEnabled
+		pcall(function()
+			ws.StreamingMinRadius = math.min(radius, 1024)
+		end)
+		pcall(function()
+			ws.StreamingTargetRadius = radius
+		end)
+	end)
+
+	if status then
+		if ok then
+			status.Text = "Streaming radius set to " .. tostring(radius) .. " studs."
+		else
+			status.Text = "Streaming locked by game (use Max Quality)."
+		end
+	end
+
+	return ok
+end
+
+StreamApply.Activated:Connect(function()
+	ApplyStreamingRadius(StreamBox.Text)
+end)
+
+-- Preset buttons
+local PresetCard = Card(ToolsPage, 52)
+
+local function MakePreset(text, xScale, radius)
+	local btn = New("TextButton", {
+		Position = UDim2.new(xScale, 4, 0, 8),
+		Size = UDim2.new(0.31, -8, 0, 36),
+		BackgroundColor3 = Theme.Panel2,
+		BorderSizePixel = 0,
+		Text = text,
+		TextColor3 = Theme.White,
+		TextSize = 8,
+		Font = Enum.Font.GothamBold,
+		AutoButtonColor = false,
+	}, PresetCard)
+	Corner(btn, 8)
+	btn.Activated:Connect(function()
+		StreamBox.Text = tostring(radius)
+		ApplyStreamingRadius(radius)
+	end)
+	return btn
+end
+
+MakePreset("512", 0, 512)
+MakePreset("2048", 0.33, 2048)
+MakePreset("4096", 0.66, 4096)
+
+-- Optional low-quality FPS mode (kept, but not recommended for high flying)
+local FPSBoostState = false
+local SavedQuality
+
+local function SetFPSBoost(value)
+	FPSBoostState = value
+
+	local s = settings()
+
+	if value then
+		-- Don't fight Max Quality
+		if RenderState.MaxQuality then
+			RenderState.MaxQuality = false
+		end
+
+		SavedQuality = s.Rendering.QualityLevel
+		s.Rendering.QualityLevel = Enum.QualityLevel.Level01
+		status.Text = "FPS Boost ON (not ideal while flying high)."
+	else
+		if SavedQuality then
+			s.Rendering.QualityLevel = SavedQuality
+		end
+		status.Text = "FPS Boost OFF."
+	end
+end
+
+CreateToggle(
+	ToolsPage,
+	"FPS Boost (Low Quality)",
+	"Lowers quality for FPS. Avoid this when flying high — use Max Quality instead.",
+	function()
+		return FPSBoostState
+	end,
+	SetFPSBoost
+)
+
+local PerformanceCard = Card(ToolsPage, 88)
+local PerformanceText = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 9),
+	Size = UDim2.new(1, -24, 0, 70),
+	BackgroundTransparency = 1,
+	Text = "High flying anti-pause tip:\n• Max Quality ON + Stream Keep-Alive ON\n• Streaming Radius 2048–4096\n• No Fog ON\n• Avoid FPS Boost while lifting",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+	Font = Enum.Font.Gotham,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Top,
+}, PerformanceCard)
+
+--========================================================--
+-- INITIALIZATION
+--========================================================--
+
+ShowPage("Main")
+RefreshCheckpointStatus()
+
+print("================================================")
+print("             XYRIX LOADED")
+print("             Premium Interface")
+print("================================================")
