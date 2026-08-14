@@ -1,0 +1,2709 @@
+--========================================================--
+--                       XYRIX
+--             PREMIUM LANDSCAPE UI v FINAL
+--========================================================--
+-- Features:
+-- • Animated floating X button
+-- • Animated aura / spinning logo
+-- • Landscape responsive panel
+-- • Sidebar navigation
+-- • Main / Movement / Checkpoints / Settings
+-- • Float + adjustable height
+-- • Infinite Lift + adjustable speed
+-- • Noclip
+-- • TPWalk + adjustable speed
+-- • Checkpoint 1 / Checkpoint 2 cycling
+-- • Reset checkpoints
+-- • GUI scale settings
+-- • Session save / reset
+-- • PC + Mobile input
+--========================================================--
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local Player = Players.LocalPlayer
+local Parent = gethui and gethui() or game:GetService("CoreGui")
+
+--========================================================--
+-- CLEANUP
+--========================================================--
+
+for _, v in ipairs(Parent:GetChildren()) do
+	if v.Name == "Xyrix" or v.Name == "XyrixHub" then
+		v:Destroy()
+	end
+end
+
+--========================================================--
+-- GUI
+--========================================================--
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "Xyrix"
+Gui.ResetOnSpawn = false
+Gui.IgnoreGuiInset = true
+Gui.DisplayOrder = 999999
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+Gui.Parent = Parent
+
+--========================================================--
+-- THEME
+--========================================================--
+
+local Theme = {
+	Background = Color3.fromRGB(8, 7, 15),
+	Background2 = Color3.fromRGB(12, 10, 23),
+
+	Panel = Color3.fromRGB(15, 13, 28),
+	Panel2 = Color3.fromRGB(20, 17, 36),
+
+	Card = Color3.fromRGB(23, 20, 42),
+	CardHover = Color3.fromRGB(30, 24, 53),
+
+	Violet = Color3.fromRGB(170, 75, 255),
+	Purple = Color3.fromRGB(126, 65, 255),
+	Indigo = Color3.fromRGB(82, 83, 255),
+	Blue = Color3.fromRGB(61, 139, 255),
+	Cyan = Color3.fromRGB(85, 210, 255),
+
+	White = Color3.fromRGB(247, 245, 255),
+	SoftWhite = Color3.fromRGB(220, 216, 235),
+	Gray = Color3.fromRGB(145, 140, 168),
+	DarkGray = Color3.fromRGB(83, 78, 103),
+
+	Green = Color3.fromRGB(78, 225, 151),
+	Red = Color3.fromRGB(255, 91, 125),
+
+	Off = Color3.fromRGB(48, 44, 66),
+	Stroke = Color3.fromRGB(91, 75, 145),
+}
+
+local Fast = TweenInfo.new(
+	0.16,
+	Enum.EasingStyle.Quint,
+	Enum.EasingDirection.Out
+)
+
+local Smooth = TweenInfo.new(
+	0.3,
+	Enum.EasingStyle.Quint,
+	Enum.EasingDirection.Out
+)
+
+local Spring = TweenInfo.new(
+	0.42,
+	Enum.EasingStyle.Back,
+	Enum.EasingDirection.Out
+)
+
+--========================================================--
+-- HELPERS
+--========================================================--
+
+local function New(class, props, parent)
+	local obj = Instance.new(class)
+
+	for property, value in pairs(props or {}) do
+		obj[property] = value
+	end
+
+	obj.Parent = parent
+	return obj
+end
+
+local function Corner(obj, radius)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius)
+	c.Parent = obj
+	return c
+end
+
+local function Stroke(obj, color, transparency, thickness)
+	local s = Instance.new("UIStroke")
+	s.Color = color
+	s.Transparency = transparency or 0
+	s.Thickness = thickness or 1
+	s.Parent = obj
+	return s
+end
+
+local function Gradient(obj, colors, rotation)
+	local keys = {}
+
+	for i, color in ipairs(colors) do
+		keys[#keys + 1] = ColorSequenceKeypoint.new(
+			(i - 1) / (#colors - 1),
+			color
+		)
+	end
+
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(keys)
+	g.Rotation = rotation or 0
+	g.Parent = obj
+
+	return g
+end
+
+local function Tween(obj, properties, info)
+	local t = TweenService:Create(
+		obj,
+		info or Fast,
+		properties
+	)
+
+	t:Play()
+	return t
+end
+
+--========================================================--
+-- DEFAULT SETTINGS
+--========================================================--
+
+local Defaults = {
+	GUIScale = 0.82,
+
+	FloatHeight = 18.5,
+	LiftSpeed = 1.5,
+	TPWalkSpeed = 1,
+
+	Float = false,
+	Lift = false,
+	Noclip = false,
+	TPWalk = false,
+}
+
+local Settings = {}
+
+for k, v in pairs(Defaults) do
+	Settings[k] = v
+end
+
+--========================================================--
+-- CHARACTER
+--========================================================--
+
+local Character
+local Humanoid
+local Root
+
+local function UpdateCharacter()
+	Character = Player.Character or Player.CharacterAdded:Wait()
+
+	Humanoid = Character:WaitForChild("Humanoid")
+	Root = Character:WaitForChild("HumanoidRootPart")
+end
+
+UpdateCharacter()
+
+Player.CharacterAdded:Connect(function()
+	task.wait(0.25)
+	UpdateCharacter()
+end)
+
+--========================================================--
+-- MECHANIC CONNECTIONS
+--========================================================--
+
+local FloatConnection
+local LiftConnection
+local NoclipConnection
+local TPWalkConnection
+
+local function Disconnect(connection)
+	if connection then
+		connection:Disconnect()
+	end
+
+	return nil
+end
+
+--========================================================--
+-- FLOAT
+--========================================================--
+
+local FloatBaseY
+
+local function StopFloat()
+	FloatConnection = Disconnect(FloatConnection)
+	FloatBaseY = nil
+
+	-- Remove artificial vertical velocity rather than
+	-- suddenly forcing the character downward/upward.
+	if Root and Root.Parent then
+		local velocity = Root.AssemblyLinearVelocity
+
+		Root.AssemblyLinearVelocity = Vector3.new(
+			velocity.X,
+			0,
+			velocity.Z
+		)
+	end
+end
+
+local function StartFloat()
+	StopFloat()
+
+	if not Root or not Root.Parent then
+		return
+	end
+
+	FloatBaseY = Root.Position.Y + Settings.FloatHeight
+
+	FloatConnection = RunService.Heartbeat:Connect(function()
+		if not Root or not Root.Parent then
+			return
+		end
+
+		if not Settings.Float then
+			return
+		end
+
+		local p = Root.Position
+
+		-- Preserve horizontal movement.
+		-- Only control the vertical coordinate.
+		Root.AssemblyLinearVelocity = Vector3.new(
+			Root.AssemblyLinearVelocity.X,
+			0,
+			Root.AssemblyLinearVelocity.Z
+		)
+
+		Root.CFrame = CFrame.new(
+			p.X,
+			FloatBaseY,
+			p.Z
+		) * CFrame.Angles(
+			Root.Orientation.X * math.pi / 180,
+			Root.Orientation.Y * math.pi / 180,
+			Root.Orientation.Z * math.pi / 180
+		)
+	end)
+end
+
+local function SetFloat(value)
+	Settings.Float = value
+
+	if value then
+		StartFloat()
+	else
+		StopFloat()
+	end
+end
+
+--========================================================--
+-- INFINITE LIFT
+--========================================================--
+
+local function StopLift()
+	LiftConnection = Disconnect(LiftConnection)
+
+	if Root and Root.Parent then
+		local velocity = Root.AssemblyLinearVelocity
+
+		Root.AssemblyLinearVelocity = Vector3.new(
+			velocity.X,
+			0,
+			velocity.Z
+		)
+	end
+end
+
+local function StartLift()
+	StopLift()
+
+	LiftConnection = RunService.Heartbeat:Connect(function()
+		if not Settings.Lift then
+			return
+		end
+
+		if not Root or not Root.Parent then
+			return
+		end
+
+		local velocity = Root.AssemblyLinearVelocity
+
+		Root.AssemblyLinearVelocity = Vector3.new(
+			velocity.X,
+			Settings.LiftSpeed * 25,
+			velocity.Z
+		)
+	end)
+end
+
+local function SetLift(value)
+	Settings.Lift = value
+
+	if value then
+		StartLift()
+	else
+		StopLift()
+	end
+end
+
+--========================================================--
+-- NOCLIP
+--========================================================--
+
+local function RestoreCollisions()
+	if not Character then
+		return
+	end
+
+	for _, object in ipairs(Character:GetDescendants()) do
+		if object:IsA("BasePart") then
+			object.CanCollide = true
+		end
+	end
+end
+
+local function StopNoclip()
+	NoclipConnection = Disconnect(NoclipConnection)
+	RestoreCollisions()
+end
+
+local function StartNoclip()
+	StopNoclip()
+
+	NoclipConnection = RunService.Stepped:Connect(function()
+		if not Settings.Noclip then
+			return
+		end
+
+		if not Character then
+			return
+		end
+
+		for _, object in ipairs(Character:GetDescendants()) do
+			if object:IsA("BasePart") then
+				object.CanCollide = false
+			end
+		end
+	end)
+end
+
+local function SetNoclip(value)
+	Settings.Noclip = value
+
+	if value then
+		StartNoclip()
+	else
+		StopNoclip()
+	end
+end
+
+--========================================================--
+-- TPWALK
+--========================================================--
+
+local function StopTPWalk()
+	TPWalkConnection = Disconnect(TPWalkConnection)
+end
+
+local function StartTPWalk()
+	StopTPWalk()
+
+	TPWalkConnection = RunService.Heartbeat:Connect(function()
+		if not Settings.TPWalk then
+			return
+		end
+
+		if not Humanoid or not Root then
+			return
+		end
+
+		local direction = Humanoid.MoveDirection
+
+		if direction.Magnitude > 0 then
+			Root.CFrame =
+				Root.CFrame +
+				(direction * Settings.TPWalkSpeed)
+		end
+	end)
+end
+
+local function SetTPWalk(value)
+	Settings.TPWalk = value
+
+	if value then
+		StartTPWalk()
+	else
+		StopTPWalk()
+	end
+end
+
+--========================================================--
+-- CHECKPOINT SYSTEM
+--========================================================--
+
+local Checkpoint1
+local Checkpoint2
+local TeleportIndex = 1
+
+local function SaveCheckpoint(number)
+	if not Root or not Root.Parent then
+		return false
+	end
+
+	if number == 1 then
+		Checkpoint1 = Root.CFrame
+	elseif number == 2 then
+		Checkpoint2 = Root.CFrame
+	end
+
+	return true
+end
+
+local function ResetCheckpoints()
+	Checkpoint1 = nil
+	Checkpoint2 = nil
+	TeleportIndex = 1
+end
+
+local function TeleportCheckpoint()
+	if not Root or not Root.Parent then
+		return false
+	end
+
+	-- Normal cycle:
+	-- CP1 → CP2 → CP1 → CP2
+	if TeleportIndex == 1 then
+
+		if Checkpoint1 then
+			Root.CFrame = Checkpoint1
+			TeleportIndex = 2
+			return true
+		elseif Checkpoint2 then
+			Root.CFrame = Checkpoint2
+			TeleportIndex = 1
+			return true
+		end
+
+	else
+
+		if Checkpoint2 then
+			Root.CFrame = Checkpoint2
+			TeleportIndex = 1
+			return true
+		elseif Checkpoint1 then
+			Root.CFrame = Checkpoint1
+			TeleportIndex = 2
+			return true
+		end
+
+	end
+
+	return false
+end
+
+--========================================================--
+-- MAIN SCALE
+--========================================================--
+
+local MainScale = Instance.new("UIScale")
+MainScale.Scale = Settings.GUIScale
+
+--========================================================--
+-- MAIN WINDOW
+--========================================================--
+
+local Main = New("Frame", {
+	Name = "Main",
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(490, 300),
+
+	BackgroundColor3 = Theme.Background,
+	BorderSizePixel = 0,
+
+	Visible = false,
+	Active = true,
+}, Gui)
+
+MainScale.Parent = Main
+
+Corner(Main, 17)
+
+local MainStroke = Stroke(
+	Main,
+	Theme.Violet,
+	0.2,
+	1.4
+)
+
+Gradient(
+	Main,
+	{
+		Color3.fromRGB(18, 14, 32),
+		Color3.fromRGB(8, 8, 16)
+	},
+	90
+)
+
+--========================================================--
+-- AURA
+--========================================================--
+
+local Aura1 = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(1, 18, 1, 18),
+
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+
+	ZIndex = 0,
+}, Main)
+
+Corner(Aura1, 23)
+
+local AuraStroke1 = Stroke(
+	Aura1,
+	Theme.Violet,
+	0.88,
+	2
+)
+
+local Aura2 = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(1, 32, 1, 32),
+
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+
+	ZIndex = 0,
+}, Main)
+
+Corner(Aura2, 28)
+
+local AuraStroke2 = Stroke(
+	Aura2,
+	Theme.Blue,
+	0.93,
+	2
+)
+
+-- Animated aura breathing
+task.spawn(function()
+	while Gui.Parent do
+		Tween(
+			AuraStroke1,
+			{Transparency = 0.94},
+			TweenInfo.new(
+				1.4,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		Tween(
+			AuraStroke2,
+			{Transparency = 0.97},
+			TweenInfo.new(
+				1.6,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		task.wait(1.4)
+
+		Tween(
+			AuraStroke1,
+			{Transparency = 0.84},
+			TweenInfo.new(
+				1.4,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		Tween(
+			AuraStroke2,
+			{Transparency = 0.90},
+			TweenInfo.new(
+				1.6,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		task.wait(1.4)
+	end
+end)
+
+--========================================================--
+-- HEADER
+--========================================================--
+
+local Header = New("Frame", {
+	Position = UDim2.fromOffset(0, 0),
+	Size = UDim2.new(1, 0, 0, 55),
+
+	BackgroundColor3 = Theme.Panel,
+	BorderSizePixel = 0,
+
+	Active = true,
+}, Main)
+
+Corner(Header, 17)
+
+local HeaderLine = New("Frame", {
+	Position = UDim2.new(0, 0, 1, -2),
+	Size = UDim2.new(1, 0, 0, 2),
+
+	BorderSizePixel = 0,
+	BackgroundColor3 = Theme.Violet,
+}, Header)
+
+Gradient(
+	HeaderLine,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo,
+		Theme.Blue
+	},
+	0
+)
+
+-- Logo
+local LogoHolder = New("Frame", {
+	Position = UDim2.fromOffset(12, 9),
+	Size = UDim2.fromOffset(37, 37),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+}, Header)
+
+Corner(LogoHolder, 11)
+Stroke(LogoHolder, Theme.Violet, 0.45, 1)
+
+local LogoImage = New("ImageLabel", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+
+	Size = UDim2.new(0.78, 0, 0.78, 0),
+
+	BackgroundTransparency = 1,
+
+	Image = "rbxassetid://95386622584308",
+	ImageColor3 = Theme.White,
+
+	ScaleType = Enum.ScaleType.Fit,
+}, LogoHolder)
+
+--========================================================--
+-- TITLE
+--========================================================--
+
+local Title = New("TextLabel", {
+	Position = UDim2.fromOffset(59, 8),
+	Size = UDim2.new(1, -160, 0, 22),
+
+	BackgroundTransparency = 1,
+
+	Text = "XYRIX",
+	TextColor3 = Theme.White,
+	TextSize = 17,
+
+	Font = Enum.Font.GothamBlack,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, Header)
+
+local Subtitle = New("TextLabel", {
+	Position = UDim2.fromOffset(60, 29),
+	Size = UDim2.new(1, -170, 0, 13),
+
+	BackgroundTransparency = 1,
+
+	Text = "PREMIUM CONTROL PANEL",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, Header)
+
+--========================================================--
+-- MINIMIZE / CLOSE
+--========================================================--
+
+local Minimize = New("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, -49, 0.5, 0),
+
+	Size = UDim2.fromOffset(30, 30),
+
+	BackgroundColor3 = Theme.Card,
+	BorderSizePixel = 0,
+
+	Text = "—",
+	TextColor3 = Theme.SoftWhite,
+	TextSize = 16,
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, Header)
+
+Corner(Minimize, 9)
+Stroke(Minimize, Theme.Stroke, 0.5, 1)
+
+local Close = New("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, -12, 0.5, 0),
+
+	Size = UDim2.fromOffset(30, 30),
+
+	BackgroundColor3 = Color3.fromRGB(48, 24, 43),
+	BorderSizePixel = 0,
+
+	Text = "×",
+	TextColor3 = Theme.Red,
+	TextSize = 19,
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, Header)
+
+Corner(Close, 9)
+Stroke(Close, Theme.Red, 0.65, 1)
+
+--========================================================--
+-- SIDEBAR
+--========================================================--
+
+local Sidebar = New("Frame", {
+	Position = UDim2.fromOffset(9, 65),
+	Size = UDim2.fromOffset(110, 225),
+
+	BackgroundColor3 = Theme.Panel,
+	BorderSizePixel = 0,
+}, Main)
+
+Corner(Sidebar, 13)
+Stroke(Sidebar, Theme.Stroke, 0.65, 1)
+
+--========================================================--
+-- CONTENT AREA
+--========================================================--
+
+local Content = New("Frame", {
+	Position = UDim2.fromOffset(129, 65),
+	Size = UDim2.new(1, -138, 1, -75),
+
+	BackgroundTransparency = 1,
+}, Main)
+
+--========================================================--
+-- SIDEBAR BUTTONS
+--========================================================--
+
+local Pages = {}
+local PageButtons = {}
+
+local function CreatePage(name, icon, order)
+	local button = New("TextButton", {
+		Position = UDim2.fromOffset(7, 8 + ((order - 1) * 32)),
+		Size = UDim2.new(1, -14, 0, 27),
+
+		BackgroundColor3 = Theme.Card,
+		BorderSizePixel = 0,
+
+		Text = "",
+		AutoButtonColor = false,
+	}, Sidebar)
+
+	Corner(button, 9)
+
+	local iconLabel = New("TextLabel", {
+		Position = UDim2.fromOffset(10, 0),
+		Size = UDim2.fromOffset(25, 27),
+
+		BackgroundTransparency = 1,
+
+		Text = icon,
+		TextColor3 = Theme.Gray,
+		TextSize = 14,
+
+		Font = Enum.Font.GothamBold,
+	}, button)
+
+	local label = New("TextLabel", {
+		Position = UDim2.fromOffset(34, 0),
+		Size = UDim2.new(1, -40, 1, 0),
+
+		BackgroundTransparency = 1,
+
+		Text = name,
+		TextColor3 = Theme.Gray,
+		TextSize = 10,
+
+		Font = Enum.Font.GothamSemibold,
+
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, button)
+
+	local page = New("ScrollingFrame", {
+		Name = name,
+		Size = UDim2.fromScale(1, 1),
+
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Theme.Violet,
+
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+
+		Visible = false,
+	}, Content)
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 7)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = page
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingBottom = UDim.new(0, 15)
+	padding.Parent = page
+
+	Pages[name] = page
+	PageButtons[name] = {
+		Button = button,
+		Icon = iconLabel,
+		Label = label,
+	}
+
+	return page
+end
+
+local MainPage = CreatePage("Main", "⌂", 1)
+local MovementPage = CreatePage("Movement", "✦", 2)
+local CheckpointPage = CreatePage("Checkpoints", "◆", 3)
+local SettingsPage = CreatePage("Settings", "⚙", 4)
+local VisualsPage = CreatePage("Visuals", "◈", 5)
+local ToolsPage = CreatePage("Tools", "✦", 6)
+
+--========================================================--
+-- PAGE SWITCHING
+--========================================================--
+
+local CurrentPage
+
+local function ShowPage(name)
+	for pageName, page in pairs(Pages) do
+		local selected = pageName == name
+
+		page.Visible = selected
+
+		local data = PageButtons[pageName]
+
+		if selected then
+			Tween(
+				data.Button,
+				{BackgroundColor3 = Color3.fromRGB(38, 27, 64)},
+				Fast
+			)
+
+			Tween(
+				data.Icon,
+				{TextColor3 = Theme.Violet},
+				Fast
+			)
+
+			Tween(
+				data.Label,
+				{TextColor3 = Theme.White},
+				Fast
+			)
+		else
+			Tween(
+				data.Button,
+				{BackgroundColor3 = Theme.Card},
+				Fast
+			)
+
+			Tween(
+				data.Icon,
+				{TextColor3 = Theme.Gray},
+				Fast
+			)
+
+			Tween(
+				data.Label,
+				{TextColor3 = Theme.Gray},
+				Fast
+			)
+		end
+	end
+
+	CurrentPage = name
+end
+
+for name, data in pairs(PageButtons) do
+	data.Button.Activated:Connect(function()
+		ShowPage(name)
+	end)
+end
+
+--========================================================--
+-- PAGE HELPERS
+--========================================================--
+
+local function Section(page, text)
+	local holder = New("Frame", {
+		Size = UDim2.new(1, -4, 0, 27),
+		BackgroundTransparency = 1,
+	}, page)
+
+	local label = New("TextLabel", {
+		Position = UDim2.fromOffset(2, 6),
+		Size = UDim2.new(1, -4, 0, 14),
+
+		BackgroundTransparency = 1,
+
+		Text = text,
+		TextColor3 = Theme.Gray,
+		TextSize = 9,
+
+		Font = Enum.Font.GothamBold,
+
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, holder)
+
+	return holder
+end
+
+local function Card(page, height)
+	local frame = New("Frame", {
+		Size = UDim2.new(1, -4, 0, height),
+
+		BackgroundColor3 = Theme.Card,
+		BorderSizePixel = 0,
+	}, page)
+
+	Corner(frame, 11)
+	Stroke(frame, Theme.Stroke, 0.65, 1)
+
+	return frame
+end
+
+--========================================================--
+-- TOGGLE
+--========================================================--
+
+local function CreateToggle(page, name, description, getter, setter)
+	local row = Card(page, 50)
+
+	local title = New("TextLabel", {
+		Position = UDim2.fromOffset(12, 6),
+		Size = UDim2.new(1, -75, 0, 18),
+
+		BackgroundTransparency = 1,
+
+		Text = name,
+		TextColor3 = Theme.White,
+		TextSize = 12,
+
+		Font = Enum.Font.GothamSemibold,
+
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, row)
+
+	local desc = New("TextLabel", {
+		Position = UDim2.fromOffset(12, 25),
+		Size = UDim2.new(1, -75, 0, 14),
+
+		BackgroundTransparency = 1,
+
+		Text = description,
+		TextColor3 = Theme.Gray,
+		TextSize = 8,
+
+		Font = Enum.Font.Gotham,
+
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, row)
+
+	local switch = New("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -11, 0.5, 0),
+
+		Size = UDim2.fromOffset(44, 23),
+
+		BackgroundColor3 = Theme.Off,
+		BorderSizePixel = 0,
+
+		Text = "",
+		AutoButtonColor = false,
+	}, row)
+
+	Corner(switch, 100)
+
+	local knob = New("Frame", {
+		Position = UDim2.fromOffset(3, 3),
+		Size = UDim2.fromOffset(17, 17),
+
+		BackgroundColor3 = Color3.fromRGB(190, 187, 205),
+		BorderSizePixel = 0,
+	}, switch)
+
+	Corner(knob, 100)
+
+	local function UpdateVisual(on)
+		if on then
+			Tween(
+				switch,
+				{BackgroundColor3 = Theme.Violet},
+				Fast
+			)
+
+			Tween(
+				knob,
+				{
+					Position = UDim2.new(1, -20, 0, 3),
+					BackgroundColor3 = Theme.White
+				},
+				Fast
+			)
+
+			Tween(
+				row,
+				{BackgroundColor3 = Color3.fromRGB(29, 23, 49)},
+				Fast
+			)
+		else
+			Tween(
+				switch,
+				{BackgroundColor3 = Theme.Off},
+				Fast
+			)
+
+			Tween(
+				knob,
+				{
+					Position = UDim2.fromOffset(3, 3),
+					BackgroundColor3 = Color3.fromRGB(190, 187, 205)
+				},
+				Fast
+			)
+
+			Tween(
+				row,
+				{BackgroundColor3 = Theme.Card},
+				Fast
+			)
+		end
+	end
+
+	UpdateVisual(getter())
+
+	switch.Activated:Connect(function()
+		local newState = not getter()
+
+		setter(newState)
+		UpdateVisual(newState)
+	end)
+
+	return {
+		SetVisual = UpdateVisual
+	}
+end
+
+--========================================================--
+-- MAIN PAGE
+--========================================================--
+
+Section(MainPage, "XYRIX CONTROL CENTER")
+
+local welcome = Card(MainPage, 62)
+
+local welcomeTitle = New("TextLabel", {
+	Position = UDim2.fromOffset(13, 8),
+	Size = UDim2.new(1, -26, 0, 22),
+
+	BackgroundTransparency = 1,
+
+	Text = "Welcome to Xyrix",
+	TextColor3 = Theme.White,
+	TextSize = 15,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, welcome)
+
+local welcomeText = New("TextLabel", {
+	Position = UDim2.fromOffset(13, 31),
+	Size = UDim2.new(1, -26, 0, 20),
+
+	BackgroundTransparency = 1,
+
+	Text = "Premium movement and utility controls.",
+	TextColor3 = Theme.Gray,
+	TextSize = 9,
+
+	Font = Enum.Font.Gotham,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, welcome)
+
+Section(MainPage, "QUICK STATUS")
+
+local statusCard = Card(MainPage, 70)
+
+local statusTitle = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 8),
+	Size = UDim2.new(1, -24, 0, 17),
+
+	BackgroundTransparency = 1,
+
+	Text = "SYSTEM STATUS",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, statusCard)
+
+local status = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 28),
+	Size = UDim2.new(1, -24, 0, 28),
+
+	BackgroundTransparency = 1,
+
+	Text = "All features are currently idle.",
+	TextColor3 = Theme.SoftWhite,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextWrapped = true,
+}, statusCard)
+
+--========================================================--
+-- MOVEMENT PAGE
+--========================================================--
+
+Section(MovementPage, "FLOAT")
+
+CreateToggle(
+	MovementPage,
+	"Float",
+	"Maintain a controlled floating height.",
+	function()
+		return Settings.Float
+	end,
+	SetFloat
+)
+
+local FloatCard = Card(MovementPage, 55)
+
+local FloatLabel = New("TextLabel", {
+	Position = UDim2.fromOffset(10, 7),
+	Size = UDim2.new(0.45, 0, 0, 17),
+
+	BackgroundTransparency = 1,
+
+	Text = "HEIGHT",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.GothamBold,
+}, FloatCard)
+
+local FloatBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 25),
+	Size = UDim2.new(0.45, -5, 0, 23),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = tostring(Settings.FloatHeight),
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, FloatCard)
+
+Corner(FloatBox, 7)
+
+local FloatSet = New("TextButton", {
+	Position = UDim2.new(0.5, 0, 0, 15),
+	Size = UDim2.new(0.46, -8, 0, 27),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "APPLY",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, FloatCard)
+
+Corner(FloatSet, 7)
+
+Gradient(
+	FloatSet,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+FloatSet.Activated:Connect(function()
+	local value = tonumber(FloatBox.Text)
+
+	if value and value > 0 and value < 300 then
+		Settings.FloatHeight = value
+
+		if Settings.Float then
+			StartFloat()
+		end
+
+		Tween(FloatSet, {
+			BackgroundColor3 = Theme.Green
+		})
+
+		task.delay(0.35, function()
+			if FloatSet and FloatSet.Parent then
+				Gradient(
+					FloatSet,
+					{
+						Theme.Violet,
+						Theme.Purple,
+						Theme.Indigo
+					},
+					0
+				)
+			end
+		end)
+	end
+end)
+
+Section(MovementPage, "INFINITE LIFT")
+
+CreateToggle(
+	MovementPage,
+	"Infinite Lift",
+	"Continuously move upward at a controlled rate.",
+	function()
+		return Settings.Lift
+	end,
+	SetLift
+)
+
+local LiftCard = Card(MovementPage, 55)
+
+local LiftBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 15),
+	Size = UDim2.new(0.45, -5, 0, 27),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = tostring(Settings.LiftSpeed),
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, LiftCard)
+
+Corner(LiftBox, 7)
+
+local LiftSet = New("TextButton", {
+	Position = UDim2.new(0.5, 0, 0, 15),
+	Size = UDim2.new(0.46, -8, 0, 27),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "SET SPEED",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, LiftCard)
+
+Corner(LiftSet, 7)
+
+Gradient(
+	LiftSet,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+LiftSet.Activated:Connect(function()
+	local value = tonumber(LiftBox.Text)
+
+	if value and value > 0 and value <= 15 then
+		Settings.LiftSpeed = value
+	end
+end)
+
+Section(MovementPage, "NOCLIP")
+
+CreateToggle(
+	MovementPage,
+	"Noclip",
+	"Disable character collision.",
+	function()
+		return Settings.Noclip
+	end,
+	SetNoclip
+)
+
+Section(MovementPage, "TPWALK")
+
+CreateToggle(
+	MovementPage,
+	"TPWalk",
+	"Move using the configured movement step.",
+	function()
+		return Settings.TPWalk
+	end,
+	SetTPWalk
+)
+
+local TPCard = Card(MovementPage, 55)
+
+local TPBox = New("TextBox", {
+	Position = UDim2.fromOffset(10, 15),
+	Size = UDim2.new(0.45, -5, 0, 27),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = tostring(Settings.TPWalkSpeed),
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamMedium,
+
+	ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Center,
+}, TPCard)
+
+Corner(TPBox, 7)
+
+local TPSet = New("TextButton", {
+	Position = UDim2.new(0.5, 0, 0, 15),
+	Size = UDim2.new(0.46, -8, 0, 27),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "SET SPEED",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, TPCard)
+
+Corner(TPSet, 7)
+
+Gradient(
+	TPSet,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+TPSet.Activated:Connect(function()
+	local value = tonumber(TPBox.Text)
+
+	if value and value > 0 and value <= 50 then
+		Settings.TPWalkSpeed = value
+	end
+end)
+
+--========================================================--
+-- CHECKPOINT PAGE
+--========================================================--
+
+Section(CheckpointPage, "CHECKPOINT SYSTEM")
+
+local CPStatus = Card(CheckpointPage, 62)
+
+local CPStatusText = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 8),
+	Size = UDim2.new(1, -24, 0, 18),
+
+	BackgroundTransparency = 1,
+
+	Text = "NO POINTS SAVED",
+	TextColor3 = Theme.Gray,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, CPStatus)
+
+local CPNext = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 31),
+	Size = UDim2.new(1, -24, 0, 17),
+
+	BackgroundTransparency = 1,
+
+	Text = "Teleport order: CP1 → CP2",
+	TextColor3 = Theme.SoftWhite,
+	TextSize = 9,
+
+	Font = Enum.Font.Gotham,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, CPStatus)
+
+local function RefreshCheckpointStatus()
+	local first = Checkpoint1 ~= nil
+	local second = Checkpoint2 ~= nil
+
+	if first and second then
+		CPStatusText.Text = "CP1 + CP2 SAVED"
+		CPStatusText.TextColor3 = Theme.Green
+	elseif first then
+		CPStatusText.Text = "CP1 SAVED"
+		CPStatusText.TextColor3 = Theme.Green
+	elseif second then
+		CPStatusText.Text = "CP2 SAVED"
+		CPStatusText.TextColor3 = Theme.Green
+	else
+		CPStatusText.Text = "NO POINTS SAVED"
+		CPStatusText.TextColor3 = Theme.Gray
+	end
+
+	if TeleportIndex == 1 then
+		CPNext.Text = "Next teleport: CP1"
+	else
+		CPNext.Text = "Next teleport: CP2"
+	end
+end
+
+local CP1Card = Card(CheckpointPage, 58)
+
+local CP1Button = New("TextButton", {
+	Position = UDim2.fromOffset(10, 10),
+	Size = UDim2.new(1, -20, 0, 38),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = "SET CHECKPOINT 1",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, CP1Card)
+
+Corner(CP1Button, 8)
+
+CP1Button.Activated:Connect(function()
+	if SaveCheckpoint(1) then
+		TeleportIndex = 1
+		CPStatusText.Text = "CP1 SAVED"
+		CPStatusText.TextColor3 = Theme.Green
+		RefreshCheckpointStatus()
+	end
+end)
+
+local CP2Card = Card(CheckpointPage, 58)
+
+local CP2Button = New("TextButton", {
+	Position = UDim2.fromOffset(10, 10),
+	Size = UDim2.new(1, -20, 0, 38),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = "SET CHECKPOINT 2",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, CP2Card)
+
+Corner(CP2Button, 8)
+
+CP2Button.Activated:Connect(function()
+	if SaveCheckpoint(2) then
+		CPStatusText.Text = "CP2 SAVED"
+		CPStatusText.TextColor3 = Theme.Green
+		RefreshCheckpointStatus()
+	end
+end)
+
+local TeleportCard = Card(CheckpointPage, 58)
+
+local TeleportButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 10),
+	Size = UDim2.new(1, -20, 0, 38),
+
+	BackgroundColor3 = Theme.Violet,
+	BorderSizePixel = 0,
+
+	Text = "TELEPORT • NEXT POINT",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, TeleportCard)
+
+Corner(TeleportButton, 8)
+
+Gradient(
+	TeleportButton,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+TeleportButton.Activated:Connect(function()
+	if TeleportCheckpoint() then
+		RefreshCheckpointStatus()
+
+		Tween(
+			TeleportButton,
+			{BackgroundColor3 = Theme.Green},
+			Fast
+		)
+
+		task.delay(0.25, function()
+			if TeleportButton and TeleportButton.Parent then
+				Gradient(
+					TeleportButton,
+					{
+						Theme.Violet,
+						Theme.Purple,
+						Theme.Indigo
+					},
+					0
+				)
+			end
+		end)
+	end
+end)
+
+local ResetCPCard = Card(CheckpointPage, 58)
+
+local ResetCPButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 10),
+	Size = UDim2.new(1, -20, 0, 38),
+
+	BackgroundColor3 = Color3.fromRGB(52, 27, 43),
+	BorderSizePixel = 0,
+
+	Text = "RESET CHECKPOINTS",
+	TextColor3 = Theme.Red,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, ResetCPCard)
+
+Corner(ResetCPButton, 8)
+
+ResetCPButton.Activated:Connect(function()
+	ResetCheckpoints()
+	RefreshCheckpointStatus()
+end)
+
+--========================================================--
+-- SETTINGS PAGE
+--========================================================--
+
+Section(SettingsPage, "INTERFACE")
+
+local ScaleCard = Card(SettingsPage, 85)
+
+local ScaleTitle = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 7),
+	Size = UDim2.new(1, -24, 0, 17),
+
+	BackgroundTransparency = 1,
+
+	Text = "GUI SIZE",
+	TextColor3 = Theme.White,
+	TextSize = 10,
+
+	Font = Enum.Font.GothamBold,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, ScaleCard)
+
+local ScaleValue = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 25),
+	Size = UDim2.new(1, -24, 0, 15),
+
+	BackgroundTransparency = 1,
+
+	Text = "82%",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.Gotham,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, ScaleCard)
+
+local ScaleBar = New("Frame", {
+	Position = UDim2.fromOffset(12, 50),
+	Size = UDim2.new(1, -24, 0, 7),
+
+	BackgroundColor3 = Theme.Off,
+	BorderSizePixel = 0,
+}, ScaleCard)
+
+Corner(ScaleBar, 100)
+
+local ScaleFill = New("Frame", {
+	Size = UDim2.new(
+		(Settings.GUIScale - 0.6) / 0.6,
+		0,
+		1,
+		0
+	),
+
+	BackgroundColor3 = Theme.Violet,
+	BorderSizePixel = 0,
+}, ScaleBar)
+
+Corner(ScaleFill, 100)
+
+local ScaleKnob = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+
+	Position = UDim2.new(
+		(Settings.GUIScale - 0.6) / 0.6,
+		0,
+		0.5,
+		0
+	),
+
+	Size = UDim2.fromOffset(13, 13),
+
+	BackgroundColor3 = Theme.White,
+	BorderSizePixel = 0,
+}, ScaleBar)
+
+Corner(ScaleKnob, 100)
+
+local draggingScale = false
+
+local function UpdateScaleFromX(x)
+	local relative =
+		math.clamp(
+			(x - ScaleBar.AbsolutePosition.X)
+				/ ScaleBar.AbsoluteSize.X,
+			0,
+			1
+		)
+
+	local value =
+		math.floor(
+			(0.6 + relative * 0.6) * 100
+		) / 100
+
+	Settings.GUIScale = value
+
+	ScaleValue.Text =
+		tostring(
+			math.floor(value * 100)
+		) .. "%"
+
+	local position = (value - 0.6) / 0.6
+
+	ScaleFill.Size =
+		UDim2.new(position, 0, 1, 0)
+
+	ScaleKnob.Position =
+		UDim2.new(position, 0, 0.5, 0)
+
+	Tween(
+		MainScale,
+		{Scale = value},
+		Fast
+	)
+end
+
+ScaleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		draggingScale = true
+		UpdateScaleFromX(input.Position.X)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if draggingScale then
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			UpdateScaleFromX(input.Position.X)
+		end
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		draggingScale = false
+	end
+end)
+
+--========================================================--
+-- SAVE / RESET
+--========================================================--
+
+Section(SettingsPage, "PROFILE")
+
+local SaveCard = Card(SettingsPage, 105)
+
+local SaveInfo = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 7),
+	Size = UDim2.new(1, -24, 0, 28),
+
+	BackgroundTransparency = 1,
+
+	Text = "Save your current interface preferences\nfor this running session.",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+
+	Font = Enum.Font.Gotham,
+
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextWrapped = true,
+}, SaveCard)
+
+local SaveButton = New("TextButton", {
+	Position = UDim2.fromOffset(12, 43),
+	Size = UDim2.new(0.47, -6, 0, 37),
+
+	BackgroundColor3 = Theme.Purple,
+	BorderSizePixel = 0,
+
+	Text = "SAVE SETTINGS",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, SaveCard)
+
+Corner(SaveButton, 8)
+
+Gradient(
+	SaveButton,
+	{
+		Theme.Violet,
+		Theme.Purple,
+		Theme.Indigo
+	},
+	0
+)
+
+local ResetButton = New("TextButton", {
+	Position = UDim2.new(0.53, 0, 0, 43),
+	Size = UDim2.new(0.47, -12, 0, 37),
+
+	BackgroundColor3 = Color3.fromRGB(52, 27, 43),
+	BorderSizePixel = 0,
+
+	Text = "RESET DEFAULTS",
+	TextColor3 = Theme.Red,
+	TextSize = 9,
+
+	Font = Enum.Font.GothamBold,
+
+	AutoButtonColor = false,
+}, SaveCard)
+
+Corner(ResetButton, 8)
+
+-- Session snapshot
+local SavedSettings = {}
+
+local function SaveSettings()
+	for key, value in pairs(Settings) do
+		SavedSettings[key] = value
+	end
+end
+
+local function RestoreDefaults()
+	SetFloat(false)
+	SetLift(false)
+	SetNoclip(false)
+	SetTPWalk(false)
+
+	for key, value in pairs(Defaults) do
+		Settings[key] = value
+	end
+
+	FloatBox.Text = tostring(Settings.FloatHeight)
+	LiftBox.Text = tostring(Settings.LiftSpeed)
+	TPBox.Text = tostring(Settings.TPWalkSpeed)
+
+	Tween(
+		MainScale,
+		{Scale = Settings.GUIScale},
+		Smooth
+	)
+
+	ScaleValue.Text =
+		tostring(
+			math.floor(Settings.GUIScale * 100)
+		) .. "%"
+
+	local position =
+		(Settings.GUIScale - 0.6) / 0.6
+
+	ScaleFill.Size =
+		UDim2.new(position, 0, 1, 0)
+
+	ScaleKnob.Position =
+		UDim2.new(position, 0, 0.5, 0)
+
+	ResetCheckpoints()
+	RefreshCheckpointStatus()
+end
+
+SaveButton.Activated:Connect(function()
+	SaveSettings()
+
+	Tween(
+		SaveButton,
+		{BackgroundColor3 = Theme.Green},
+		Fast
+	)
+
+	SaveInfo.Text =
+		"Settings saved for this running session."
+
+	task.delay(0.5, function()
+		Gradient(
+			SaveButton,
+			{
+				Theme.Violet,
+				Theme.Purple,
+				Theme.Indigo
+			},
+			0
+		)
+
+		SaveInfo.Text =
+			"Save your current interface preferences\nfor this running session."
+	end)
+end)
+
+ResetButton.Activated:Connect(function()
+	RestoreDefaults()
+
+	Tween(
+		ResetButton,
+		{BackgroundColor3 = Theme.Violet},
+		Fast
+	)
+
+	task.delay(0.3, function()
+		Tween(
+			ResetButton,
+			{BackgroundColor3 = Color3.fromRGB(52, 27, 43)},
+			Fast
+		)
+	end)
+end)
+
+--========================================================--
+-- DRAGGING
+--========================================================--
+
+local function MakeDraggable(object, handle)
+	local dragging = false
+	local dragStart
+	local startPosition
+	local dragInput
+
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragging = true
+			dragStart = input.Position
+			startPosition = object.Position
+			dragInput = input
+		end
+	end)
+
+	handle.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and input == dragInput then
+
+			local delta =
+				input.Position - dragStart
+
+			object.Position = UDim2.new(
+				startPosition.X.Scale,
+				startPosition.X.Offset + delta.X,
+
+				startPosition.Y.Scale,
+				startPosition.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragging = false
+		end
+	end)
+end
+
+MakeDraggable(Main, Header)
+
+--========================================================--
+-- FLOATING CIRCLE
+--========================================================--
+
+local Circle = New("TextButton", {
+	Name = "XyrixCircle",
+
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -20, 0.17, 0),
+
+	Size = UDim2.fromOffset(52, 52),
+
+	BackgroundColor3 = Theme.Panel2,
+	BorderSizePixel = 0,
+
+	Text = "",
+	AutoButtonColor = false,
+
+	Active = true,
+	ZIndex = 100,
+}, Gui)
+
+Corner(Circle, 100)
+
+local CircleStroke = Stroke(
+	Circle,
+	Theme.Violet,
+	0.08,
+	2.2
+)
+
+Gradient(
+	Circle,
+	{
+		Color3.fromRGB(35, 20, 60),
+		Color3.fromRGB(21, 25, 58),
+		Color3.fromRGB(15, 21, 43)
+	},
+	45
+)
+
+--========================================================--
+-- CIRCLE AURAS
+--========================================================--
+
+local CircleAura = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+
+	Position = UDim2.fromScale(0.5, 0.5),
+
+	Size = UDim2.new(1, 8, 1, 8),
+
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+
+	ZIndex = 99,
+}, Circle)
+
+Corner(CircleAura, 100)
+
+local CircleAuraStroke = Stroke(
+	CircleAura,
+	Theme.Violet,
+	0.82,
+	2
+)
+
+local CircleAura2 = New("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+
+	Position = UDim2.fromScale(0.5, 0.5),
+
+	Size = UDim2.new(1, 17, 1, 17),
+
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+
+	ZIndex = 98,
+}, Circle)
+
+Corner(CircleAura2, 100)
+
+local CircleAuraStroke2 = Stroke(
+	CircleAura2,
+	Theme.Blue,
+	0.92,
+	2
+)
+
+--========================================================--
+-- CIRCLE IMAGE
+--========================================================--
+
+local CircleImage = New("ImageLabel", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+
+	Position = UDim2.fromScale(0.5, 0.5),
+
+	Size = UDim2.new(0.63, 0, 0.63, 0),
+
+	BackgroundTransparency = 1,
+
+	Image = "rbxassetid://95386622584308",
+
+	ImageColor3 = Theme.White,
+
+	ScaleType = Enum.ScaleType.Fit,
+
+	ZIndex = 101,
+}, Circle)
+
+--========================================================--
+-- CIRCLE ANIMATION
+--========================================================--
+
+local CircleRotationRunning = false
+local CircleRotation = 0
+
+task.spawn(function()
+	while Gui.Parent do
+
+		Tween(
+			CircleAuraStroke,
+			{Transparency = 0.92},
+			TweenInfo.new(
+				1.2,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		Tween(
+			CircleAuraStroke2,
+			{Transparency = 0.97},
+			TweenInfo.new(
+				1.4,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		task.wait(1.2)
+
+		Tween(
+			CircleAuraStroke,
+			{Transparency = 0.72},
+			TweenInfo.new(
+				1.2,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		Tween(
+			CircleAuraStroke2,
+			{Transparency = 0.88},
+			TweenInfo.new(
+				1.4,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut
+			)
+		)
+
+		task.wait(1.2)
+	end
+end)
+
+-- Smooth continuous logo rotation while open.
+RunService.RenderStepped:Connect(function(dt)
+	if CircleRotationRunning then
+		CircleRotation += dt * 120
+		CircleImage.Rotation = CircleRotation
+	end
+end)
+
+--========================================================--
+-- OPEN / CLOSE
+--========================================================--
+
+local Open = false
+local Animating = false
+
+local function OpenMain()
+	if Open or Animating then
+		return
+	end
+
+	Animating = true
+	Open = true
+
+	Main.Visible = true
+
+	Main.Size = UDim2.fromOffset(430, 260)
+
+	Tween(
+		Main,
+		{Size = UDim2.fromOffset(490, 300)},
+		Spring
+	)
+
+	CircleRotationRunning = true
+
+	Tween(
+		CircleStroke,
+		{
+			Color = Theme.Green,
+			Thickness = 3
+		},
+		Smooth
+	)
+
+	Tween(
+		CircleImage,
+		{
+			ImageColor3 = Theme.Green
+		},
+		Smooth
+	)
+
+	Tween(
+		CircleAuraStroke,
+		{
+			Color = Theme.Green
+		},
+		Smooth
+	)
+
+	task.delay(0.4, function()
+		Animating = false
+	end)
+end
+
+local function CloseMain()
+	if not Open or Animating then
+		return
+	end
+
+	Animating = true
+	Open = false
+
+	CircleRotationRunning = false
+
+	Tween(
+		Main,
+		{Size = UDim2.fromOffset(430, 260)},
+		TweenInfo.new(
+			0.2,
+			Enum.EasingStyle.Quint,
+			Enum.EasingDirection.In
+		)
+	)
+
+	Tween(
+		CircleStroke,
+		{
+			Color = Theme.Violet,
+			Thickness = 2.2
+		},
+		Smooth
+	)
+
+	Tween(
+		CircleImage,
+		{
+			ImageColor3 = Theme.White
+		},
+		Smooth
+	)
+
+	Tween(
+		CircleAuraStroke,
+		{
+			Color = Theme.Violet
+		},
+		Smooth
+	)
+
+	task.delay(0.2, function()
+		if not Open then
+			Main.Visible = false
+		end
+
+		Animating = false
+	end)
+end
+
+Circle.Activated:Connect(function()
+	if Open then
+		CloseMain()
+	else
+		OpenMain()
+	end
+end)
+
+Close.Activated:Connect(CloseMain)
+
+-- Minimize returns to circle.
+Minimize.Activated:Connect(CloseMain)
+
+--========================================================--
+-- CIRCLE DRAGGING WITHOUT BREAKING TAP
+--========================================================--
+
+local CircleDragging = false
+local CircleMoved = false
+local CircleDragStart
+local CircleStartPosition
+
+Circle.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		CircleDragging = true
+		CircleMoved = false
+
+		CircleDragStart = input.Position
+		CircleStartPosition = Circle.Position
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not CircleDragging then
+		return
+	end
+
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement
+		and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+
+	local delta =
+		input.Position - CircleDragStart
+
+	if delta.Magnitude > 8 then
+		CircleMoved = true
+	end
+
+	Circle.Position = UDim2.new(
+		CircleStartPosition.X.Scale,
+		CircleStartPosition.X.Offset + delta.X,
+
+		CircleStartPosition.Y.Scale,
+		CircleStartPosition.Y.Offset + delta.Y
+	)
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		CircleDragging = false
+	end
+end)
+
+--========================================================--
+-- VISUALS PAGE
+--========================================================--
+
+Section(VisualsPage, "WORLD VISUALS")
+
+local Lighting = game:GetService("Lighting")
+
+local VisualState = {
+	NoFog = false,
+	NoGlobalShadows = false,
+	FullBright = false,
+	ColorCorrection = false,
+	Bloom = false,
+}
+
+local SavedLighting = {
+	FogEnd = Lighting.FogEnd,
+	FogStart = Lighting.FogStart,
+	GlobalShadows = Lighting.GlobalShadows,
+	Brightness = Lighting.Brightness,
+	Ambient = Lighting.Ambient,
+	OutdoorAmbient = Lighting.OutdoorAmbient,
+}
+
+local ColorCorrection = Lighting:FindFirstChild("XyrixColorCorrection")
+if not ColorCorrection then
+	ColorCorrection = Instance.new("ColorCorrectionEffect")
+	ColorCorrection.Name = "XyrixColorCorrection"
+	ColorCorrection.Enabled = false
+	ColorCorrection.Parent = Lighting
+end
+
+local Bloom = Lighting:FindFirstChild("XyrixBloom")
+if not Bloom then
+	Bloom = Instance.new("BloomEffect")
+	Bloom.Name = "XyrixBloom"
+	Bloom.Enabled = false
+	Bloom.Intensity = 0.35
+	Bloom.Size = 24
+	Bloom.Threshold = 1
+	Bloom.Parent = Lighting
+end
+
+local function RestoreLighting()
+	Lighting.FogEnd = SavedLighting.FogEnd
+	Lighting.FogStart = SavedLighting.FogStart
+	Lighting.GlobalShadows = SavedLighting.GlobalShadows
+	Lighting.Brightness = SavedLighting.Brightness
+	Lighting.Ambient = SavedLighting.Ambient
+	Lighting.OutdoorAmbient = SavedLighting.OutdoorAmbient
+	ColorCorrection.Enabled = false
+	Bloom.Enabled = false
+end
+
+CreateToggle(
+	VisualsPage,
+	"No Fog",
+	"Removes distant fog while enabled.",
+	function() return VisualState.NoFog end,
+	function(on)
+		VisualState.NoFog = on
+		Lighting.FogEnd = on and 100000 or SavedLighting.FogEnd
+		Lighting.FogStart = on and 0 or SavedLighting.FogStart
+	end
+)
+
+CreateToggle(
+	VisualsPage,
+	"No Global Shadows",
+	"Disables the global shadow system.",
+	function() return VisualState.NoGlobalShadows end,
+	function(on)
+		VisualState.NoGlobalShadows = on
+		Lighting.GlobalShadows = not on and SavedLighting.GlobalShadows or false
+	end
+)
+
+CreateToggle(
+	VisualsPage,
+	"FullBright",
+	"Keeps the scene brighter and easier to see.",
+	function() return VisualState.FullBright end,
+	function(on)
+		VisualState.FullBright = on
+		if on then
+			Lighting.Brightness = 2
+			Lighting.Ambient = Color3.fromRGB(150,150,150)
+			Lighting.OutdoorAmbient = Color3.fromRGB(150,150,150)
+		else
+			Lighting.Brightness = SavedLighting.Brightness
+			Lighting.Ambient = SavedLighting.Ambient
+			Lighting.OutdoorAmbient = SavedLighting.OutdoorAmbient
+		end
+	end
+)
+
+CreateToggle(
+	VisualsPage,
+	"Color Boost",
+	"Adds a subtle contrast and saturation boost.",
+	function() return VisualState.ColorCorrection end,
+	function(on)
+		VisualState.ColorCorrection = on
+		ColorCorrection.Enabled = on
+		if on then
+			ColorCorrection.Brightness = 0.03
+			ColorCorrection.Contrast = 0.12
+			ColorCorrection.Saturation = 0.10
+			ColorCorrection.TintColor = Color3.fromRGB(240,235,255)
+		end
+	end
+)
+
+CreateToggle(
+	VisualsPage,
+	"Bloom",
+	"Adds a soft glow to bright areas.",
+	function() return VisualState.Bloom end,
+	function(on)
+		VisualState.Bloom = on
+		Bloom.Enabled = on
+	end
+)
+
+local RestoreVisualsCard = Card(VisualsPage, 56)
+local RestoreVisualsButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Theme.CardHover,
+	BorderSizePixel = 0,
+	Text = "RESTORE ROBLOX LIGHTING",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, RestoreVisualsCard)
+Corner(RestoreVisualsButton, 8)
+RestoreVisualsButton.Activated:Connect(function()
+	VisualState.NoFog = false
+	VisualState.NoGlobalShadows = false
+	VisualState.FullBright = false
+	VisualState.ColorCorrection = false
+	VisualState.Bloom = false
+	RestoreLighting()
+end)
+
+--========================================================--
+-- TOOLS PAGE
+--========================================================--
+
+Section(ToolsPage, "UTILITY TOOLS")
+
+local CharacterResetCard = Card(ToolsPage, 56)
+local CharacterResetButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Theme.Card,
+	BorderSizePixel = 0,
+	Text = "REFRESH CHARACTER REFERENCES",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, CharacterResetCard)
+Corner(CharacterResetButton, 8)
+CharacterResetButton.Activated:Connect(function()
+	pcall(UpdateCharacter)
+	status.Text = "Character references refreshed."
+end)
+
+local StopAllCard = Card(ToolsPage, 56)
+local StopAllButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Color3.fromRGB(52, 27, 43),
+	BorderSizePixel = 0,
+	Text = "STOP ACTIVE MOVEMENT FEATURES",
+	TextColor3 = Theme.Red,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, StopAllCard)
+Corner(StopAllButton, 8)
+StopAllButton.Activated:Connect(function()
+	SetFloat(false)
+	SetLift(false)
+	SetNoclip(false)
+	SetTPWalk(false)
+	status.Text = "Active movement features stopped."
+end)
+
+local ResetLightingCard = Card(ToolsPage, 56)
+local ResetLightingButton = New("TextButton", {
+	Position = UDim2.fromOffset(10, 9),
+	Size = UDim2.new(1, -20, 0, 38),
+	BackgroundColor3 = Theme.Card,
+	BorderSizePixel = 0,
+	Text = "RESET VISUAL MODIFIERS",
+	TextColor3 = Theme.White,
+	TextSize = 9,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+}, ResetLightingCard)
+Corner(ResetLightingButton, 8)
+ResetLightingButton.Activated:Connect(RestoreLighting)
+
+Section(ToolsPage, "PERFORMANCE")
+
+local PerformanceCard = Card(ToolsPage, 72)
+local PerformanceText = New("TextLabel", {
+	Position = UDim2.fromOffset(12, 9),
+	Size = UDim2.new(1, -24, 0, 54),
+	BackgroundTransparency = 1,
+	Text = "Visual tips:\n• NoFog is cheap and useful for distant visibility.\n• Bloom/Color Boost are optional cosmetic effects.\n• Restore Lighting returns the saved baseline.",
+	TextColor3 = Theme.Gray,
+	TextSize = 8,
+	Font = Enum.Font.Gotham,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Top,
+}, PerformanceCard)
+
+--========================================================--
+-- INITIALIZATION
+--========================================================--
+
+ShowPage("Main")
+RefreshCheckpointStatus()
+
+print("================================================")
+print("             XYRIX LOADED")
+print("             Premium Interface")
+print("================================================")
+
+
+
+--========================================================--
+-- XYLIX / XYRIX HIGH-ALTITUDE STREAM STABILITY MODULE
+-- Added: targeted streaming keep-alive + pre-teleport prefetch
+--========================================================--
+
+local XylixStream = {
+    Enabled = true,
+    Interval = 3,
+    Timeout = 2,
+    PreTeleportLead = 4,
+    LastRequest = 0,
+}
+
+local function XylixGetRoot()
+    local c = Player.Character
+    if not c then return nil end
+    return c:FindFirstChild("HumanoidRootPart")
+end
+
+local function XylixRequest(position)
+    if not position then return end
+    local ok = pcall(function()
+        Player:RequestStreamAroundAsync(position, XylixStream.Timeout)
+    end)
+    return ok
+end
+
+local function XylixPrefetchCurrentAndCheckpoint()
+    if not XylixStream.Enabled then return end
+
+    local root = XylixGetRoot()
+    if not root then return end
+
+    local now = os.clock()
+    if now - XylixStream.LastRequest < XylixStream.Interval then
+        return
+    end
+    XylixStream.LastRequest = now
+
+    XylixRequest(root.Position)
+
+    -- Prefetch the checkpoint that the lift timer is most likely
+    -- to use next. This is intentionally one targeted request,
+    -- rather than trying to load the entire map.
+    local target = nil
+    if TeleportIndex == 1 then
+        target = Checkpoint1 or Checkpoint2
+    else
+        target = Checkpoint2 or Checkpoint1
+    end
+
+    if target then
+        XylixRequest(target.Position)
+    end
+end
+
+local function XylixPrefetchBeforeTeleport(target)
+    if not target then return end
+    XylixRequest(target.Position)
+end
+
+-- Lightweight background loop. It does not run every frame.
+task.spawn(function()
+    while Gui and Gui.Parent do
+        if Settings and Settings.Lift then
+            XylixPrefetchCurrentAndCheckpoint()
+        end
+        task.wait(0.5)
+    end
+end)
+
+--========================================================--
+-- SAFER HIGH-ALTITUDE QUALITY
+--========================================================--
+
+local function XylixApplyMaxQuality()
+    pcall(function()
+        if settings and settings().Rendering then
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level21
+        end
+    end)
+end
+
+-- Use quality rather than aggressive "FPS boost" settings while lifting.
+task.spawn(function()
+    while Gui and Gui.Parent do
+        if Settings and Settings.Lift then
+            XylixApplyMaxQuality()
+        end
+        task.wait(5)
+    end
+end)
+
+--========================================================--
+-- LIFT-TIMER INTEGRATION
+--========================================================--
+-- Call XylixPrefetchBeforeTeleport(target) immediately before
+-- the existing lift timer teleports to CP1/CP2.
+-- Infinite Lift itself is never disabled by this module.
+--========================================================--
